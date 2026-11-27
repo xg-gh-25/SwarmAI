@@ -1,0 +1,21 @@
+GSAP 3.15.1 (npm package 'gsap', file dist/gsap.min.js), vendored unmodified.
+The npm package ships no LICENSE file. Its license terms, quoted from the package:
+
+package.json "license": Standard 'no charge' license: https://gsap.com/standard-license.
+
+dist/gsap.min.js header:
+/*!
+ * GSAP 3.15.1
+ * https://gsap.com
+ * 
+ * @license Copyright 2026, GreenSock. All rights reserved.
+ * Subject to the terms at https://gsap.com/standard-license.
+ * @author: Jack Doyle, jack@greensock.com
+ */
+
+README.md:
+### License
+GreenSock's standard "no charge" license can be viewed at <a href="https://gsap.com/standard-license">https://gsap.com/standard-license</a>.
+
+
+Full terms: https://gsap.com/standard-license

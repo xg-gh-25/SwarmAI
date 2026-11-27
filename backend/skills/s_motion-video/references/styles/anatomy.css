@@ -1,0 +1,182 @@
+/* anatomy.css — Mechanical Anatomy style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ * System fonts only; no imports, no remote URLs, no web fonts. GSAP animates transforms/opacity only;
+ * these classes set initial layout, never CSS animation or transition.
+ * The machine itself is inline SVG paths built by the projection snippet in anatomy.md; the classes
+ * below give it its tones (paper fills, four side shades, white tops, graphite hairlines) and draw
+ * the framed figure card with its four corner labels.
+ * Light theme is the default; add class "an-dark" to #stage for the dark plate.
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* palette: plate (light, the shipping theme) */
+  --an-page: #F2F2EF;          /* frame outside the card */
+  --an-card: #FBFBFA;          /* card = paper: every solid's base fill */
+  --an-rule: #8A8A8F;          /* 1px card frame */
+  --an-text: #57575A;          /* Fig n, readout */
+  --an-strong: #18181A;        /* statement, selected legend key */
+  --an-muted: #8C8C90;         /* title, phase, unselected keys */
+
+  /* palette: solids */
+  --an-face: #FFFFFF;          /* lit fill */
+  --an-top: #FFFFFF;           /* every top face */
+  --an-shade-0: #DCDCD9;       /* side facing away from the light */
+  --an-shade-1: #E5E5E2;
+  --an-shade-2: #EDEDEA;
+  --an-shade-3: #F4F4F1;       /* side facing the light */
+  --an-lit-top: #FFFFFF;
+  --an-lit-shade: #EEEEEB;
+
+  /* palette: lines (tone hierarchy) */
+  --an-hi: #26262A;            /* subject outline, zero mark, pointer */
+  --an-mid: #8A8A8F;           /* structure outline, major ticks, screws */
+  --an-lo: #B4B4B8;            /* base outline, minor ticks */
+  --an-faint: #D4D4D6;         /* grooves, creases, inset outlines, floor grid */
+  --an-lit: #000000;           /* THE accent: the one part to watch */
+  --an-dot: #3A3A3E;           /* screws, rivets, perforations (with opacity) */
+  --an-halo: #8A8A80;          /* soft shadow under base and lifted parts */
+  --an-halo-opacity: .32;
+
+  /* colour only when colour is the subject */
+  --an-red: #E5484D; --an-green: #30A46C; --an-blue: #3E63DD;      /* channels, as a set */
+  --an-heat-rim: #C2410C; --an-heat: #EA580C; --an-heat-core: #FFD9B0; --an-smoke: #AB645F;  /* fire, hot metal */
+  --an-lamp-off: #C4C4C4; --an-lamp-on: #D9480F;                   /* indicator lamp */
+  --an-brass-t: #EFE0BF; --an-brass: #D9BC86; --an-brass-d: #B8955A; --an-brass-line: #7A5C2A;  /* optional metal */
+
+  /* fonts: one mono for every word on the plate */
+  --an-mono: "SF Mono", Menlo, "PingFang SC", monospace;
+  --an-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+
+  /* type scale */
+  --an-fs-corner: calc(26 * var(--u));     /* Fig n, title, phase */
+  --an-fs-readout: calc(28 * var(--u));    /* live readout */
+  --an-fs-key: calc(24 * var(--u));        /* parts legend */
+  --an-fs-statement: calc(52 * var(--u));  /* optional plate statement (promo, end) */
+  --an-track: .1em;                        /* uppercase corners */
+
+  /* grid: the card sits in the safe area, above the caption band */
+  --an-card-x: calc(96 * var(--u));
+  --an-card-top: calc(54 * var(--u));
+  --an-card-bottom: var(--cap-band, calc(54 * var(--u)));
+  --an-corner: calc(36 * var(--u));        /* label inset from the card frame */
+  --an-line: calc(1.5 * var(--u));         /* outline weight */
+  --an-line-fine: calc(1 * var(--u));      /* ticks, grooves, creases, seams */
+  --an-line-lit: calc(2.4 * var(--u));     /* lit edge, needle */
+  --an-halo-blur: calc(14 * var(--u));
+
+  /* captions (drawn by the runtime): a square plate label under the card */
+  --cap-bg: #FBFBFA;
+  --cap-fg: #18181A;
+  --cap-font: var(--an-mono);
+  --cap-size: calc(34 * var(--u));
+  --cap-weight: 500;
+  --cap-radius: 0;
+  --cap-bottom: calc(52 * var(--u));
+  --cap-border: 1px solid #8A8A8F;
+  --cap-shadow: none;
+  --cap-mark: dot;
+  --cap-accent: #26262A;
+}
+@media (orientation: portrait) {
+  :root {
+    --an-card-x: calc(54 * var(--u));
+    --an-corner: calc(30 * var(--u));
+    --an-fs-corner: calc(24 * var(--u));
+    --an-fs-statement: calc(48 * var(--u));
+    --cap-size: calc(32 * var(--u));
+    --cap-bottom: calc(180 * var(--u));
+  }
+}
+
+/* dark plate: same structure, inverted tones (lit = white) */
+.an-dark {
+  --an-page: #0B0B0B; --an-card: #131313; --an-rule: #6A6A6A; --an-text: #A3A3A3; --an-strong: #E6E6E6; --an-muted: #6E6E6E;
+  --an-face: #1B1B1B; --an-top: #1C1C1C;
+  --an-shade-0: #0F0F0F; --an-shade-1: #121212; --an-shade-2: #151515; --an-shade-3: #181818;
+  --an-lit-top: #262626; --an-lit-shade: #1D1D1D;
+  --an-hi: #D4D4D4; --an-mid: #6A6A6A; --an-lo: #3E3E3E; --an-faint: #2A2A2A; --an-lit: #FFFFFF;
+  --an-dot: #E6E6E6; --an-halo: #050505; --an-halo-opacity: .9;
+  --an-red: #FF6B6B; --an-green: #6BE0A0; --an-blue: #6B9BFF;
+  --cap-bg: #131313; --cap-fg: #E6E6E6; --cap-border: 1px solid #6A6A6A; --cap-accent: #D4D4D4;
+}
+
+/* stage and card */
+.an-stage {
+  position: absolute; inset: 0; overflow: hidden;
+  background: var(--an-page); color: var(--an-text); font-family: var(--an-mono);
+}
+.an-card {
+  position: absolute; left: var(--an-card-x); right: var(--an-card-x);
+  top: var(--an-card-top); bottom: var(--an-card-bottom);
+  background: var(--an-card); box-shadow: 0 0 0 1px var(--an-rule); overflow: hidden;
+}
+.an-card #camera, .an-world { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.an-corner {
+  position: absolute; z-index: 5; font-family: var(--an-mono); font-size: var(--an-fs-corner);
+  line-height: 1; letter-spacing: .04em; white-space: nowrap; color: var(--an-muted);
+  background: var(--an-card); padding: calc(8 * var(--u)) calc(10 * var(--u)); margin: calc(-8 * var(--u)) calc(-10 * var(--u));
+}   /* the paper chip keeps a label legible when a close shot runs the drawing under a corner */
+.an-fig     { top: var(--an-corner); left: var(--an-corner); color: var(--an-text); }
+.an-title   { top: var(--an-corner); right: var(--an-corner); text-transform: uppercase; letter-spacing: var(--an-track); }
+.an-phase   { bottom: var(--an-corner); left: var(--an-corner); text-transform: uppercase; letter-spacing: var(--an-track); }
+.an-readout { bottom: var(--an-corner); right: var(--an-corner); color: var(--an-text); font-size: var(--an-fs-readout);
+              font-variant-numeric: tabular-nums; }
+.an-num { display: inline-block; text-align: right; font-variant-numeric: tabular-nums; }   /* give it a fixed width in ch */
+
+/* status lamp in front of the phase word (off grey, on = the scene's one colour) */
+.an-lamp { display: inline-block; width: .42em; height: .42em; margin-right: .7em; border-radius: 50%;
+           background: var(--an-lamp-off); vertical-align: .12em; }
+
+/* optional plate statement: mono, upper-left of the card, never over the machine */
+.an-statement {
+  position: absolute; z-index: 5; left: var(--an-corner); top: calc(var(--an-corner) + 64 * var(--u));
+  margin: 0; font: 500 var(--an-fs-statement)/1.18 var(--an-mono); letter-spacing: -.01em;
+  color: var(--an-strong); white-space: nowrap;
+}
+.an-statement .an-soft { color: var(--an-muted); }
+
+/* numbered parts legend (inside the card, one side, clear of the machine) */
+.an-legend { position: absolute; z-index: 5; display: flex; flex-direction: column; gap: calc(14 * var(--u));
+             font: 400 var(--an-fs-key)/1 var(--an-mono); color: var(--an-muted); white-space: nowrap; }
+.an-key { display: flex; align-items: center; gap: calc(14 * var(--u)); }
+.an-key b { font-weight: 400; color: var(--an-lo); font-variant-numeric: tabular-nums; }
+.an-key.on { color: var(--an-strong); }
+.an-key.on b { color: var(--an-strong); }
+.an-swatch { width: calc(26 * var(--u)); height: 0; border-top: calc(2 * var(--u)) solid var(--an-mid); }
+.an-key.on .an-swatch { border-top-color: var(--an-lit); }
+
+/* SVG machine: tones */
+.an-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.an-svg path, .an-svg circle, .an-svg ellipse { vector-effect: non-scaling-stroke; }
+.an-fill { fill: var(--an-card); stroke: none; }
+.an-top  { fill: var(--an-top); stroke: none; }
+.an-s0 { fill: var(--an-shade-0); stroke: var(--an-shade-0); stroke-width: .6px; }
+.an-s1 { fill: var(--an-shade-1); stroke: var(--an-shade-1); stroke-width: .6px; }
+.an-s2 { fill: var(--an-shade-2); stroke: var(--an-shade-2); stroke-width: .6px; }
+.an-s3 { fill: var(--an-shade-3); stroke: var(--an-shade-3); stroke-width: .6px; }
+.an-line { fill: none; stroke: var(--an-lo); stroke-width: var(--an-line); stroke-linecap: round; stroke-linejoin: round; }
+.an-line.fine  { stroke-width: var(--an-line-fine); }
+.an-line.hi    { stroke: var(--an-hi); }
+.an-line.mid   { stroke: var(--an-mid); }
+.an-line.lo    { stroke: var(--an-lo); }
+.an-line.faint { stroke: var(--an-faint); }
+.an-line.lit   { stroke: var(--an-lit); stroke-width: var(--an-line-lit); }
+.an-line.red   { stroke: var(--an-red); } .an-line.green { stroke: var(--an-green); } .an-line.blue { stroke: var(--an-blue); }
+.an-lit .an-top { fill: var(--an-lit-top); }
+.an-lit .an-s0, .an-lit .an-s1, .an-lit .an-s2, .an-lit .an-s3 { fill: var(--an-lit-shade); stroke: var(--an-lit-shade); }
+.an-lit .an-line.edge { stroke: var(--an-lit); stroke-width: var(--an-line-lit); }
+.an-dots circle { fill: var(--an-dot); stroke: none; opacity: .45; }
+.an-dots.hi circle { opacity: .85; } .an-dots.lo circle { opacity: .22; } .an-dots.faint circle { opacity: .12; }
+.an-ring-screw { fill: none; stroke: var(--an-lo); stroke-width: var(--an-line-fine); }
+.an-halo { fill: var(--an-halo); stroke: none; opacity: var(--an-halo-opacity); filter: blur(var(--an-halo-blur)); }
+.an-face-text { fill: var(--an-mid); font-family: var(--an-mono); letter-spacing: .04em; }
+
+/* focus: everything not selected steps down one tone (tween the filter on the group) */
+.an-dim { filter: contrast(.55) brightness(1.29); }
+.an-dark .an-dim { filter: contrast(.6) brightness(.8); }

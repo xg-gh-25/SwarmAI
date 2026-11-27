@@ -1,0 +1,190 @@
+/* dark-keynote.css — Dark Keynote Launch style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ * System fonts only; no imports, no url(), no web fonts. GSAP animates transforms/opacity only;
+ * these classes set initial layout, never CSS animation or transition.
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* palette */
+  --dk-bg0: #0A0B0F;
+  --dk-bg1: #151822;
+  --dk-cool: #3B4CCA;
+  --dk-winglow: #6F82C8;
+  --dk-surf: #12151C;
+  --dk-surf2: #1A1E28;
+  --dk-surf3: #222734;
+  --dk-win: #10131A;
+  --dk-line: rgba(255,255,255,.08);
+  --dk-hi: rgba(255,255,255,.07);
+  --dk-text: #E8EAF0;
+  --dk-num: #F1F3F7;
+  --dk-dim: #8A90A0;
+  --dk-mute: #5C6272;
+  --dk-red: #FF5A5F;              /* problem colour */
+  --dk-flow1: #C9D3E6;            /* flow colours, trails only */
+  --dk-flow2: #F2A65A;
+  --dk-flow3: #7E95FF;
+  --dk-ink: #0A0B0F;              /* text on accent */
+  --dk-accent: #B7F34A;           /* one per film: lime; alt #8B7CFF violet, #FF7A1A orange, or brand */
+  --dk-accent-glow: color-mix(in srgb, var(--dk-accent) 35%, transparent);
+
+  /* fonts */
+  --dk-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+  --dk-mono: "SF Mono", Menlo, "PingFang SC", monospace;
+
+  /* type scale */
+  --dk-fs-title: calc(96 * var(--u));  /* 48-150 */
+  --dk-fs-type: calc(48 * var(--u));
+  --dk-fs-num: calc(360 * var(--u));
+  --dk-fs-unit: calc(116 * var(--u));
+  --dk-fs-key: calc(84 * var(--u));
+  --dk-fs-label: calc(18 * var(--u));
+  --dk-fs-status: calc(17 * var(--u));
+
+  /* grid */
+  --dk-module: calc(48 * var(--u));
+  --dk-major: calc(192 * var(--u));
+
+  /* captions (drawn by the runtime) */
+  --cap-bg: rgba(12,14,19,.72);  /* chaos: .88 */
+  --cap-fg: #E8EAF0;
+  --cap-font: var(--dk-sans);
+  --cap-size: calc(40 * var(--u));
+  --cap-radius: calc(38 * var(--u));
+  --cap-bottom: calc(72 * var(--u));
+  --cap-weight: 500;
+  --cap-accent: var(--dk-accent); --cap-mark: dot;
+  --cap-border: 1px solid rgba(255,255,255,.09);
+  --cap-shadow: 0 calc(10 * var(--u)) calc(40 * var(--u)) rgba(0,0,0,.5);
+}
+@media (orientation: portrait) {
+  :root {
+    --cap-bottom: calc(220 * var(--u));
+    --dk-fs-num: 30vw;
+    --dk-fs-title: calc(72 * var(--u));
+  }
+}
+
+/* stage: base + lift + cool pool; grid, #camera, vignette inside */
+.dk-stage {
+  position: absolute; inset: 0; overflow: hidden; background: var(--dk-bg0);
+  font-family: var(--dk-sans); color: var(--dk-text);
+}
+.dk-stage::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(circle calc(0.75 * max(100vw, 100vh)) at 50% 34%, rgba(21,24,34,.95) 0%, rgba(10,11,15,0) 100%);
+}
+.dk-stage::after {
+  content: ""; position: absolute; pointer-events: none; border-radius: 50%;
+  left: calc(78% - 900 * var(--u)); top: calc(12% - 900 * var(--u)); width: calc(1800 * var(--u)); height: calc(1800 * var(--u));
+  background: radial-gradient(circle closest-side, rgba(59,76,202,.08) 0%, rgba(59,76,202,.028) 45%, rgba(59,76,202,0) 100%);
+}
+.dk-vignette {
+  position: absolute; inset: 0; z-index: 50; pointer-events: none;
+  background: radial-gradient(circle calc(1134 * var(--u)) at 50% 50%, rgba(0,0,0,0) 33.3%, rgba(0,0,0,.55) 100%);
+}
+
+/* grid 48u 3.2%, every 4th 6% (2.9% over minor); major line through centre */
+.dk-grid {
+  position: absolute; pointer-events: none;
+  left: calc(50% - 10 * var(--dk-major)); top: calc(50% - 10 * var(--dk-major));
+  width: calc(20 * var(--dk-major)); height: calc(20 * var(--dk-major));
+  background-image:
+    linear-gradient(rgba(255,255,255,.029) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.029) 1px, transparent 1px),
+    linear-gradient(rgba(255,255,255,.032) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.032) 1px, transparent 1px);
+  background-size: var(--dk-major) var(--dk-major), var(--dk-major) var(--dk-major), var(--dk-module) var(--dk-module), var(--dk-module) var(--dk-module);
+}
+.dk-camera { position: absolute; inset: 0; transform-origin: 0 0; }
+.dk-glow { position: absolute; border-radius: 50%; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle closest-side, rgba(111,130,200,.1) 0%, rgba(111,130,200,.035) 45%, rgba(111,130,200,0) 100%); }
+
+/* panels: three tiers */
+.dk-panel {
+  position: absolute; box-sizing: border-box; overflow: hidden; border-radius: calc(14 * var(--u));
+  border: 1px solid var(--dk-line);
+  background: linear-gradient(180deg, #181C25 0, var(--dk-surf) calc(60 * var(--u)), var(--dk-surf) 100%);
+  box-shadow: 0 calc(24 * var(--u)) calc(72 * var(--u)) rgba(0,0,0,.55), inset 0 1px 0 var(--dk-hi);  /* per height h: 6+.06h / 18+.18h */
+}
+.dk-panel.t2 { background: linear-gradient(180deg, #1E232E 0, var(--dk-surf2) calc(60 * var(--u)), var(--dk-surf2) 100%); }
+.dk-panel.t3 { background: linear-gradient(180deg, #242937 0, var(--dk-surf3) calc(60 * var(--u)), var(--dk-surf3) 100%); }
+.dk-panel.cheap { box-shadow: calc(2 * var(--u)) calc(10 * var(--u)) 0 rgba(0,0,0,.35), inset 0 1px 0 var(--dk-hi); }  /* y = .06h + 4 */
+.dk-winbar { position: absolute; left: 0; top: 0; right: 0; height: calc(40 * var(--u)); background: rgba(255,255,255,.025); border-bottom: 1px solid var(--dk-line); }
+
+/* product window (1920x1080 window coords, scaled as one piece) */
+.dk-product {
+  position: absolute; width: calc(1920 * var(--u)); height: calc(1080 * var(--u)); overflow: hidden; box-sizing: border-box;
+  border-radius: calc(26 * var(--u)); border: 1px solid rgba(255,255,255,.07);
+  background: linear-gradient(180deg, #12151D 0%, #0D0F15 100%); box-shadow: 0 calc(40 * var(--u)) calc(120 * var(--u)) rgba(0,0,0,.6);
+}
+.dk-pbar { position: absolute; left: 0; top: 0; width: 100%; height: calc(72 * var(--u)); background: #151923; border-bottom: 1px solid var(--dk-line); }
+.dk-pside { position: absolute; left: 0; top: calc(72 * var(--u)); width: calc(360 * var(--u)); bottom: calc(56 * var(--u)); background: rgba(255,255,255,.018); border-right: 1px solid var(--dk-line); }
+.dk-pstatus { position: absolute; left: 0; bottom: 0; width: 100%; height: calc(56 * var(--u)); background: var(--dk-win); border-top: 1px solid var(--dk-line);
+  font: 500 var(--dk-fs-status)/calc(56 * var(--u)) var(--dk-mono); letter-spacing: .02em; color: var(--dk-dim); white-space: nowrap; }
+
+/* window turn: perspective = 2.2 x window width x scale */
+.dk-turn-persp { position: absolute; inset: 0; perspective: calc(2.2 * 1920 * 0.8 * var(--u)); }
+.dk-turn { position: absolute; transform-origin: 50% 50%; }  /* opaque only */
+
+/* light sweep: three stacked copies */
+.dk-reveal, .dk-reveal > div { position: absolute; inset: 0; }
+.dk-reveal-base { opacity: .07; }
+.dk-reveal-lit { -webkit-mask-image: linear-gradient(125.52deg, #000 -1400px, transparent -700px); mask-image: linear-gradient(125.52deg, #000 -1400px, transparent -700px); }
+.dk-reveal-glint { opacity: .2; mix-blend-mode: plus-lighter; }
+.dk-reveal-glint > .dk-glint-ink { position: absolute; inset: 0; filter: brightness(0) invert(.94); }
+.dk-sweepband {
+  position: absolute; top: calc(50% - 1400 * var(--u)); left: calc(-900 * var(--u));
+  width: calc(600 * var(--u)); height: calc(2800 * var(--u)); transform: rotate(.62rad); mix-blend-mode: plus-lighter; pointer-events: none;
+  background: linear-gradient(90deg, rgba(200,215,255,0) 0%, rgba(200,215,255,.045) 50%, rgba(200,215,255,0) 100%);
+}
+
+/* labels and type */
+.dk-label { font: 600 var(--dk-fs-label) var(--dk-mono); letter-spacing: .15em; text-transform: uppercase; font-variant-numeric: tabular-nums; color: var(--dk-mute); white-space: nowrap; }
+.dk-title { font: 600 var(--dk-fs-title)/1.15 var(--dk-sans); letter-spacing: -.02em; color: var(--dk-text); white-space: nowrap; }
+.dk-type { font: 500 var(--dk-fs-type) var(--dk-sans); letter-spacing: -.01em; color: var(--dk-text); white-space: pre; display: flex; align-items: center; }
+
+/* big number (scramble) */
+.dk-numrow { display: flex; justify-content: center; align-items: baseline; gap: calc(40 * var(--u)); white-space: nowrap; }
+.dk-num { display: inline-flex; font: 600 var(--dk-fs-num)/1 var(--dk-sans); font-variant-numeric: tabular-nums; color: var(--dk-num); }
+.dk-cell { position: relative; display: inline-block; width: .6em; text-align: center; margin-right: -.045em; }
+.dk-cell.sep { width: .3em; }
+.dk-cell.scr > .dk-final { opacity: 0; }
+.dk-cell:not(.scr) > .dk-ghost { display: none; }
+.dk-ghost { position: absolute; left: 0; right: 0; top: 0; font-style: normal; opacity: .85; }
+.dk-ghost + .dk-ghost { top: -.09em; opacity: .3; }
+.dk-ghost + .dk-ghost + .dk-ghost { top: -.18em; opacity: .14; }
+.dk-unit { font: 500 var(--dk-fs-unit) var(--dk-sans); color: var(--dk-dim); }
+.dk-keyline { font: 500 var(--dk-fs-key) var(--dk-sans); color: var(--dk-text); white-space: nowrap; text-align: center; }
+.dk-keyval { color: var(--dk-accent); text-shadow: 0 0 calc(34 * var(--u)) color-mix(in srgb, var(--dk-accent) 55%, transparent); }
+.dk-ruler { position: absolute; width: calc(720 * var(--u)); height: calc(40 * var(--u)); }
+.dk-ruler::before { content: ""; position: absolute; left: 0; top: 0; width: 100%; height: 2px; background: rgba(255,255,255,.12); }
+.dk-ruler-fill { position: absolute; left: 0; top: -1px; width: 100%; height: 4px; background: var(--dk-accent); transform-origin: 0 50%; transform: scaleX(0);
+  box-shadow: 0 0 calc(14 * var(--u)) color-mix(in srgb, var(--dk-accent) 80%, transparent); }
+
+/* live parts */
+.dk-caret { position: absolute; width: max(2px, calc(48 * 1.27 / 14 * var(--u))); height: calc(48 * 1.27 * var(--u)); border-radius: calc(4.6 * var(--u));
+  background: var(--dk-accent); box-shadow: 0 0 calc(13 * var(--u)) color-mix(in srgb, var(--dk-accent) 90%, transparent); transform-origin: 50% 50%; }
+.dk-pill { position: absolute; height: calc(38 * var(--u)); padding: 0 calc(24 * var(--u)); border-radius: calc(19 * var(--u)); background: var(--dk-accent); color: var(--dk-ink);
+  font: 600 calc(17 * var(--u))/calc(38 * var(--u)) var(--dk-sans); white-space: nowrap; box-shadow: 0 0 calc(23 * var(--u)) var(--dk-accent-glow); }
+.dk-dot { position: absolute; width: calc(10 * var(--u)); height: calc(10 * var(--u)); border-radius: 50%; background: var(--dk-accent);
+  box-shadow: 0 0 calc(8 * var(--u)) color-mix(in srgb, var(--dk-accent) 80%, transparent); }
+.dk-badge { position: absolute; height: calc(20 * var(--u)); padding: 0 calc(6 * var(--u)); border-radius: calc(10 * var(--u)); background: var(--dk-red);
+  color: #fff; font: 700 calc(13 * var(--u))/calc(20 * var(--u)) var(--dk-sans); box-shadow: 0 0 calc(8 * var(--u)) rgba(255,90,95,.5); }
+
+/* snap-grid tile */
+.dk-tile { position: absolute; box-sizing: border-box; overflow: hidden; border-radius: 20%;
+  background: linear-gradient(180deg, #1F2430 0%, var(--dk-surf2) 100%); border: 1px solid rgba(255,255,255,.09); box-shadow: inset 0 1px 0 rgba(255,255,255,.06); }
+.dk-tile.lit { border-color: color-mix(in srgb, var(--dk-accent) 85%, transparent); box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 0 calc(10 * var(--u)) var(--dk-accent-glow); }
+
+/* ending: rim light (tween opacity), CRT target (origin at the caret) */
+.dk-rim { position: absolute; box-sizing: border-box; border-radius: calc(26 * var(--u)); opacity: 0; pointer-events: none;
+  border: 1.5px solid color-mix(in srgb, var(--dk-accent) 90%, transparent);
+  box-shadow: 0 0 calc(24 * var(--u)) var(--dk-accent-glow), inset 0 0 calc(16 * var(--u)) color-mix(in srgb, var(--dk-accent) 15%, transparent); }
+.dk-crt { position: absolute; inset: 0; transform-origin: 50% 50%; }

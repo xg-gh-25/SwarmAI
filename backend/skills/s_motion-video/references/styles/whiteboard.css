@@ -1,0 +1,176 @@
+/* whiteboard.css — Whiteboard Lecture style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ * Board units: inside #wb-world one board unit = 1u at camera zoom 1; the camera only adds
+ *   translate/rotate/scale(z) on #wb-world (origin 0 0). Board SVGs use viewBox in board units
+ *   and are sized calc(BW * var(--u)) x calc(BH * var(--u)).
+ * System fonts only; no imports, no url(), no web fonts. Filters (#wb-wobble, #wb-scuff, #wb-dry) live in
+ *   the scene's inline <svg><defs> and are attached there (filter="url(#...)" attribute), not in this file.
+ * GSAP animates transforms/opacity/clip-path/dashoffset only; these classes set initial layout,
+ * never CSS animation or transition.
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* palette: board and environment */
+  --wb-board: #FBFBF9;           /* top-left */
+  --wb-board2: #EEEDE9;          /* bottom-right */
+  --wb-wall: #D8D3CA;
+  --wb-ghost: #9AA0A8;
+  --wb-ghost-blue: #8AA0C8;
+  --wb-frame1: #E9EBEE;
+  --wb-frame2: #B9BEC6;
+  --wb-frame3: #8F949C;
+  --wb-frame-edge: #7D828A;
+  --wb-tray1: #D7DADF;
+  --wb-tray2: #8E939B;
+  --wb-wall-shadow: rgba(60, 50, 40, .18);
+  --wb-prop-shadow: rgb(40, 40, 50);
+  --wb-magnet-shadow: rgb(60, 30, 20);
+
+  /* palette: ink set (classic default; nature #23262C/#2E8B57/#C8363A; night #1F2A44/#1F8A8A/#7A4FB3) */
+  --wb-dark: #23262C;            /* objects, structure */
+  --wb-signal: #2A5CB3;          /* signals, measurement, process */
+  --wb-accent: #D97757;          /* the one key thing, one per region */
+  --wb-ink-alpha: .94;
+
+  /* fonts */
+  --wb-hand: "Chalkboard SE", "Bradley Hand", "Marker Felt", "Hannotate SC", "HanziPen SC", "Kaiti SC", cursive;
+  --wb-hand-cjk: "Hannotate SC", "HanziPen SC", "Kaiti SC", "Chalkboard SE", cursive;
+  --wb-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+
+  /* type scale: font sizes for board text (board units = u at zoom 1).
+     Latin font-size = cap height h / capRatio (~0.7); CJK font-size = 1.3 h. */
+  --wb-fs-title: calc(220 * var(--u));      /* h ~154; range h 120-200 */
+  --wb-fs-title-cjk: calc(200 * var(--u));  /* h ~154 x 1.3 */
+  --wb-fs-label: calc(70 * var(--u));       /* h ~49; range h 30-70 */
+  --wb-fs-label-cjk: calc(64 * var(--u));
+  --wb-fs-ghost: calc(100 * var(--u));      /* h 50-90 */
+  --wb-w-shape: calc(9 * var(--u));         /* drawing ink 6-11 */
+
+  /* layout */
+  --wb-bw: 8000;                            /* board size in board units (unitless, for scripts) */
+  --wb-bh: 4500;
+  --wb-safe-bottom: 12vh;                   /* caption zone, never board content */
+  --wb-frame-w: calc(70 * var(--u));
+
+  /* captions (drawn by the runtime) */
+  --cap-bg: rgba(250, 249, 245, .9);
+  --cap-fg: #23262C;
+  --cap-font: var(--wb-sans);
+  --cap-size: calc(44 * var(--u));
+  --cap-radius: calc(22 * var(--u));
+  --cap-bottom: calc(32 * var(--u));        /* 3% of H */
+  --cap-weight: 500;
+  --cap-accent: var(--wb-accent);
+  --cap-shadow: 0 calc(4 * var(--u)) calc(14 * var(--u)) rgba(40, 40, 50, .12);
+}
+@media (orientation: portrait) {
+  :root {
+    --cap-bottom: calc(58 * var(--u));
+    --wb-fs-title: calc(160 * var(--u));    /* h 90-130 */
+    --wb-fs-title-cjk: calc(150 * var(--u));
+    --wb-fs-label: calc(70 * var(--u));     /* h 36-56 */
+    --wb-fs-label-cjk: calc(62 * var(--u));
+  }
+}
+
+/* stage: the wall. #wb-world (the board, camera-driven) sits inside it. */
+.wb-stage {
+  position: absolute; inset: 0; overflow: hidden;
+  background: var(--wb-wall); color: var(--wb-dark); font-family: var(--wb-hand);
+}
+.wb-world {                       /* camera target: JS writes translate/rotate/scale on it */
+  position: absolute; left: 0; top: 0; transform-origin: 0 0;
+  width: calc(8000 * var(--u)); height: calc(4500 * var(--u));
+}
+.wb-world > svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; }
+
+/* board surface (HTML fallback; the SVG version uses a userSpace gradient (0,0)->(0.3BW,BH)) */
+.wb-board {
+  position: absolute; inset: 0;
+  background: linear-gradient(163deg, var(--wb-board) 0%, var(--wb-board2) 100%);
+}
+
+/* aluminium frame, tray and wall shadow: only shown while zoom < 0.5 (JS toggles opacity) */
+.wb-frame {
+  position: absolute; pointer-events: none;
+  left: calc(-1 * var(--wb-frame-w)); top: calc(-1 * var(--wb-frame-w));
+  right: calc(-1 * var(--wb-frame-w)); bottom: calc(-1 * var(--wb-frame-w));
+  border-radius: calc(30 * var(--u));
+  background: linear-gradient(180deg, var(--wb-frame1) 0%, var(--wb-frame2) 50%, var(--wb-frame3) 100%);
+  box-shadow: calc(40 * var(--u)) calc(90 * var(--u)) calc(60 * var(--u)) var(--wb-wall-shadow);
+}
+.wb-frame::after {                /* 4-unit dark inner edge around the board face */
+  content: ""; position: absolute; inset: calc(66 * var(--u)); background: var(--wb-frame-edge);
+}
+.wb-tray {
+  position: absolute; left: 8%; width: 84%; top: calc(100% + 50 * var(--u)); height: calc(130 * var(--u));
+  border-radius: calc(18 * var(--u));
+  background: linear-gradient(180deg, var(--wb-tray1), var(--wb-tray2));
+}
+
+/* layers on the board */
+.wb-scuff { position: absolute; inset: 0; opacity: .025; pointer-events: none; }   /* holds the #wb-scuff filtered rect */
+.wb-ghosts { position: absolute; inset: 0; pointer-events: none; }                  /* each mark opacity .05-.10 */
+.wb-ink {                          /* all written ink: multiply onto the board */
+  position: absolute; inset: 0; mix-blend-mode: multiply; pointer-events: none;
+}
+
+/* SVG strokes */
+.wb-stroke {
+  fill: none; stroke: var(--wb-dark); stroke-width: 9; opacity: var(--wb-ink-alpha);
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.wb-stroke.signal { stroke: var(--wb-signal); }
+.wb-stroke.accent { stroke: var(--wb-accent); }
+.wb-stroke.hatch { stroke-width: 6; opacity: .55; }
+.wb-stroke.ghost { stroke: var(--wb-ghost); stroke-width: 12; }
+.wb-stroke.ghost.blue { stroke: var(--wb-ghost-blue); }
+.wb-pool { opacity: .3; }          /* ink pool dot, r = 0.33w, fill = ink colour */
+
+/* handwriting on the board (absolutely positioned at its baseline point, left/top in calc(N*var(--u))) */
+.wb-text {
+  position: absolute; white-space: nowrap; line-height: 1;
+  font-family: var(--wb-hand); font-weight: 400; color: var(--wb-dark);
+  opacity: var(--wb-ink-alpha);        /* scene attaches filter #wb-wobble */
+}
+.wb-text.title { font-size: var(--wb-fs-title); }
+.wb-text.label { font-size: var(--wb-fs-label); }
+.wb-text.cjk { font-family: var(--wb-hand-cjk); font-weight: 300; }
+.wb-text.cjk.title { font-size: var(--wb-fs-title-cjk); }
+.wb-text.cjk.label { font-size: var(--wb-fs-label-cjk); }
+.wb-text.signal { color: var(--wb-signal); }
+.wb-text.accent { color: var(--wb-accent); }
+.wb-g {                            /* one glyph: jitter via gsap.set, reveal via clip-path */
+  display: inline-block; transform-origin: 50% 70%;
+  -webkit-text-stroke: .065em currentColor; paint-order: stroke fill;
+  clip-path: inset(-20% 100% -20% -10%);
+}
+.wb-g.cjk-row { clip-path: none; }  /* CJK: reveal through a 3-band mask instead */
+
+/* gloss band: screen space, above ink, clipped to the board by JS; background-position set per frame */
+.wb-sheen {
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(118deg,
+    rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, .10) 45%, rgba(255, 255, 255, .16) 50%,
+    rgba(255, 255, 255, .10) 55%, rgba(255, 255, 255, 0) 100%);
+  background-size: calc(1400 * var(--u)) 100%; background-repeat: no-repeat;
+}
+
+/* props layer: markers, eraser, magnets (SVG in screen space, above ink and sheen) */
+.wb-props { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.wb-props svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; }
+.wb-prop-shadow { fill: var(--wb-prop-shadow); }
+.wb-magnet-shadow { fill: var(--wb-magnet-shadow); }
+.wb-eraser-felt { fill: #C9C4BA; }
+.wb-eraser-label { fill: var(--wb-accent); opacity: .9; }
+.wb-pin-dot { fill: #FFF8F2; }
+.wb-highlight { fill: rgba(255, 255, 255, .55); }
+
+/* caption-zone guard for layout checks (never draw board content under it) */
+.wb-safe-guard { position: absolute; left: 0; right: 0; bottom: 0; height: var(--wb-safe-bottom); pointer-events: none; }

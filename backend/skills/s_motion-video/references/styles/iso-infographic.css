@@ -1,0 +1,193 @@
+/* iso-infographic.css — Isometric Infographic style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ * System fonts only; no imports, no url(), no web fonts. GSAP animates transforms/opacity only;
+ * these classes set initial layout, never CSS animation or transition.
+ * The isometric world itself is inline SVG polygons built by script (see iso-infographic.md);
+ * the classes below style the ground, the ink information layer and the paper cards.
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* palette: interface */
+  --iso-ground: #F2E6D0;
+  --iso-dot: rgba(46, 37, 34, .10);
+  --iso-paper: #FBF4E6;
+  --iso-halo: rgba(251, 244, 230, .94);
+  --iso-ink: #2E2522;
+  --iso-ink-soft: #5A4E48;
+  --iso-ink-sub: #4A3F3A;
+  --iso-inset-bg: #F7EEDC;
+  --iso-card-shadow: rgba(46, 37, 34, .10);
+
+  /* palette: solids, top / left (+y, base) / right (+x) */
+  --iso-red-t: #CF5140; --iso-red-l: #B3352B; --iso-red-r: #8C2620;  /* subject only */
+  --iso-blue-t: #5A9BCB; --iso-blue-l: #3C7FB1; --iso-blue-r: #2D6390;
+  --iso-green-t: #7BA75F; --iso-green-l: #5E8C4A; --iso-green-r: #476F37;
+  --iso-soil-t: #A77850; --iso-soil-l: #8A5B3A; --iso-soil-r: #6A432A;
+  --iso-mustard-t: #E9BE5C; --iso-mustard-l: #D9A53A; --iso-mustard-r: #B0832A;
+  --iso-stone-t: #CFCABF; --iso-stone-l: #B8B2A6; --iso-stone-r: #948E83;
+  --iso-cream-t: #FBF4E6; --iso-cream-l: #F2E6D0; --iso-cream-r: #D9C8A9;
+  --iso-bluegrey-t: #99A4B4; --iso-bluegrey-l: #7F8FA8; --iso-bluegrey-r: #6B758D;
+  --iso-bluegreyd-t: #7F8794; --iso-bluegreyd-l: #5F6B80; --iso-bluegreyd-r: #52596E;
+  --iso-teal-t: #72B5A9; --iso-teal-l: #4FA59A; --iso-teal-r: #458682;
+  --iso-violet-t: #A388CB; --iso-violet-l: #8C6CC4; --iso-violet-r: #755AA3;
+  --iso-copper-t: #D49565; --iso-copper-l: #C97C45; --iso-copper-r: #A46640;
+  --iso-coral-t: #E9AD87; --iso-coral-l: #E39A6F; --iso-coral-r: #B97E60;
+  --iso-graphite-t: #7E797A; --iso-graphite-l: #5E5A5F; --iso-graphite-r: #514C54;
+  --iso-off-t: #E2D6C0; --iso-off-l: #CDBFA6; --iso-off-r: #B9AA90;
+  --iso-led: #7FD6A4;
+
+  /* fonts */
+  --iso-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+  --iso-num: Futura, "Avenir Next", "PingFang SC", sans-serif;   /* stand-in for a geometric number face */
+
+  /* type scale */
+  --iso-fs-title: calc(70 * var(--u));
+  --iso-fs-big: calc(120 * var(--u));      /* 100-130 */
+  --iso-fs-num: calc(54 * var(--u));
+  --iso-fs-term: calc(50 * var(--u));
+  --iso-fs-sub: calc(42 * var(--u));
+  --iso-fs-body: calc(39 * var(--u));
+  --iso-fs-kicker: calc(38 * var(--u));
+  --iso-fs-label: calc(36 * var(--u));
+  --iso-fs-header: calc(32 * var(--u));
+  --iso-fs-small: calc(30 * var(--u));     /* minimum on screen */
+
+  /* grid */
+  --iso-safe-x: calc(96 * var(--u));
+  --iso-safe-y: calc(54 * var(--u));
+  --iso-cap-zone: calc(170 * var(--u));    /* bottom band reserved for captions */
+  --iso-anchor-x: 50%;                     /* world anchor (960, 485); (640, 520) with a number column */
+  --iso-anchor-y: calc(485 * var(--u));
+  --iso-col-x: calc(1150 * var(--u));      /* number column x 1150-1800, y 150-800 */
+  --iso-col-y: calc(150 * var(--u));
+  --iso-line: calc(2 * var(--u));
+
+  /* ground lattice: spacing 45.36u, tile 78.57u x 45.36u, dot r 1.73u */
+  --iso-tile-w: calc(78.57 * var(--u));
+  --iso-tile-h: calc(45.36 * var(--u));
+  --iso-dot-r: calc(1.73 * var(--u));
+
+  /* captions (drawn by the runtime) */
+  --cap-bg: rgba(251, 244, 230, .96);
+  --cap-fg: #2E2522;
+  --cap-font: var(--iso-sans);
+  --cap-size: calc(42 * var(--u));
+  --cap-radius: calc(10 * var(--u));
+  --cap-bottom: calc(64 * var(--u));
+  --cap-weight: 500;
+  --cap-accent: #B3352B;
+  --cap-border: calc(2 * var(--u)) solid #2E2522;
+  --cap-shadow: none;
+}
+@media (orientation: portrait) {
+  :root {
+    --cap-bottom: calc(200 * var(--u));
+    --iso-anchor-y: 40%;
+    --iso-safe-x: calc(60 * var(--u));
+    --iso-fs-big: calc(100 * var(--u));
+  }
+}
+
+/* stage: flat ground + isometric dot lattice (two staggered layers). No vignette, no grain. */
+.iso-stage {
+  position: absolute; inset: 0; overflow: hidden;
+  background-color: var(--iso-ground);
+  background-image:
+    radial-gradient(circle at 50% 50%, var(--iso-dot) var(--iso-dot-r), transparent calc(var(--iso-dot-r) + .6px)),
+    radial-gradient(circle at 50% 50%, var(--iso-dot) var(--iso-dot-r), transparent calc(var(--iso-dot-r) + .6px));
+  background-size: var(--iso-tile-w) var(--iso-tile-h), var(--iso-tile-w) var(--iso-tile-h);
+  background-position: 0 0, calc(var(--iso-tile-w) / 2) calc(var(--iso-tile-h) / 2);
+  font-family: var(--iso-sans); color: var(--iso-ink);
+}
+#camera, .iso-world, .iso-overlay { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.iso-cream { position: absolute; inset: 0; z-index: 80; background: var(--iso-ground); opacity: 0; pointer-events: none; }
+
+/* SVG ink layer (information only) */
+.iso-ink { fill: none; stroke: var(--iso-ink); stroke-width: var(--iso-line); stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.iso-route { fill: none; stroke: var(--iso-ink); stroke-width: calc(3 * var(--u)); stroke-dasharray: calc(12 * var(--u)) calc(9 * var(--u)); stroke-linejoin: round; }
+.iso-route-under { fill: none; stroke: rgba(251, 244, 230, .9); stroke-width: calc(7 * var(--u)); stroke-linecap: round; stroke-linejoin: round; }
+.iso-cutline { fill: none; stroke: var(--iso-ink); stroke-width: calc(2.5 * var(--u)); stroke-dasharray: calc(10 * var(--u)) calc(7 * var(--u)); }
+.iso-ring { fill: none; stroke: var(--iso-ink); stroke-width: calc(2.6 * var(--u)); }
+.iso-pin-dot { fill: var(--iso-paper); stroke: var(--iso-ink); stroke-width: var(--iso-line); }
+.iso-pin-core { fill: var(--iso-ink); }
+.iso-pin-core.subject { fill: var(--iso-red-l); }
+.iso-plinth-shadow { fill: rgba(46, 37, 34, .13); }
+
+/* SVG text with paper halo */
+.iso-t {
+  font-family: var(--iso-sans); fill: var(--iso-ink);
+  stroke: var(--iso-halo); stroke-linejoin: round; paint-order: stroke; white-space: pre;
+}
+.iso-t.title { font-size: var(--iso-fs-title); font-weight: 700; stroke-width: calc(10 * var(--u)); }
+.iso-t.label { font-size: var(--iso-fs-label); font-weight: 700; letter-spacing: calc(1 * var(--u)); stroke-width: calc(7.2 * var(--u)); }
+.iso-t.num { font-family: var(--iso-num); font-size: var(--iso-fs-num); font-weight: 400; stroke-width: calc(10.8 * var(--u)); }
+.iso-t.unit { font-size: calc(27 * var(--u)); font-weight: 500; stroke-width: calc(6 * var(--u)); }
+.iso-t.small { font-size: var(--iso-fs-small); font-weight: 500; fill: var(--iso-ink-soft); stroke-width: calc(6 * var(--u)); }
+.iso-t.kicker { font-size: var(--iso-fs-kicker); font-weight: 700; fill: var(--iso-red-r); stroke-width: calc(7.6 * var(--u)); }
+.iso-t.sub { font-size: var(--iso-fs-sub); font-weight: 500; fill: var(--iso-ink-sub); stroke-width: calc(8.4 * var(--u)); }
+
+/* page header: "02 / 05 — Title" */
+.iso-header { position: absolute; left: var(--iso-safe-x); top: calc(var(--iso-safe-y) + 6 * var(--u)); display: flex; align-items: center; gap: calc(14 * var(--u)); white-space: nowrap; font-size: var(--iso-fs-header); }
+.iso-header-no { font-family: var(--iso-num); font-weight: 600; letter-spacing: calc(2 * var(--u)); }
+.iso-header-rule { width: calc(28 * var(--u)); height: var(--iso-line); background: var(--iso-ink); transform-origin: 0 50%; }
+.iso-header-title { font-weight: 700; }
+
+/* three-tone iso cube chip (legend, caption tick, roadmap station): hexagon of three rhombi */
+.iso-cube {
+  --t: var(--iso-red-t); --l: var(--iso-red-l); --r: var(--iso-red-r); --s: calc(13 * var(--u));
+  display: inline-block; flex: none; width: calc(var(--s) * 1.732); height: calc(var(--s) * 2);
+  background: conic-gradient(from -60deg at 50% 50%, var(--t) 0 120deg, var(--r) 0 240deg, var(--l) 0);
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+}
+.iso-cube.off { --t: var(--iso-off-t); --l: var(--iso-off-l); --r: var(--iso-off-r); }
+
+/* term card: paper, 2u ink border, hard offset shadow */
+.iso-card {
+  position: absolute; box-sizing: border-box; padding: calc(22 * var(--u)) calc(26 * var(--u)) calc(24 * var(--u));
+  background: var(--iso-paper); border: var(--iso-line) solid var(--iso-ink); border-radius: calc(11 * var(--u));
+  box-shadow: calc(5 * var(--u)) calc(7 * var(--u)) 0 var(--iso-card-shadow); white-space: nowrap;
+}
+.iso-card-head { display: flex; align-items: center; gap: calc(14 * var(--u)); }
+.iso-term { font-size: var(--iso-fs-term); font-weight: 700; line-height: 1.1; }
+.iso-plain { margin-top: calc(14 * var(--u)); font-size: var(--iso-fs-body); font-weight: 500; line-height: 1.2; color: var(--iso-ink-soft); }
+.iso-wipe { display: inline-block; clip-path: inset(-12% 100% -12% 0); }   /* tween to inset(-12% 0% -12% 0) */
+
+/* number column */
+.iso-col { position: absolute; left: var(--iso-col-x); top: var(--iso-col-y); display: flex; flex-direction: column; gap: calc(60 * var(--u)); }
+.iso-stat-label { display: inline-block; font-size: var(--iso-fs-label); font-weight: 700; letter-spacing: calc(1 * var(--u)); padding-bottom: calc(10 * var(--u)); background: linear-gradient(var(--iso-ink), var(--iso-ink)) 0 100% / calc(70 * var(--u)) calc(2.5 * var(--u)) no-repeat; }
+.iso-stat { display: flex; align-items: baseline; white-space: nowrap; margin-top: calc(14 * var(--u)); }
+.iso-stat-num { font: 400 var(--iso-fs-big)/1 var(--iso-num); font-variant-numeric: tabular-nums; }
+.iso-stat-unit { margin-left: calc(14 * var(--u)); font-size: calc(.4 * var(--iso-fs-big)); font-weight: 700; }
+
+/* icon row: identical unit icons, cell 46u, icon 0.86 x cell */
+.iso-icons { --cell: calc(46 * var(--u)); display: grid; grid-template-columns: repeat(10, var(--cell)); grid-auto-rows: var(--cell); place-items: center; }
+.iso-icons > * { width: calc(.86 * var(--cell)); height: calc(.86 * var(--cell)); }
+.iso-legend-line { margin-top: calc(12 * var(--u)); font-size: var(--iso-fs-small); font-weight: 500; color: var(--iso-ink-soft); white-space: nowrap; }
+
+/* progress bar: pill or cells */
+.iso-bar { position: relative; height: calc(26 * var(--u)); border-radius: calc(13 * var(--u)); background: var(--iso-off-t); box-shadow: inset 0 0 0 var(--iso-line) var(--iso-ink); overflow: hidden; }
+.iso-bar-seg { position: absolute; top: 0; bottom: 0; transform-origin: 0 50%; }
+.iso-cells { display: flex; gap: calc(6 * var(--u)); height: calc(26 * var(--u)); }
+.iso-cells > i { flex: 1 1 0; background: var(--iso-off-t); }
+
+/* inset magnifier */
+.iso-inset {
+  position: absolute; width: calc(400 * var(--u)); height: calc(400 * var(--u)); border-radius: 50%; overflow: hidden;
+  background: var(--iso-inset-bg); border: calc(3 * var(--u)) solid var(--iso-ink);
+  box-shadow: calc(6 * var(--u)) calc(9 * var(--u)) 0 rgba(46, 37, 34, .14);
+}
+.iso-inset::after { content: ""; position: absolute; inset: calc(-10 * var(--u)); border-radius: 50%; border: 1px dotted var(--iso-ink); }
+
+/* closing legend card (title 52u, rule, total 84u, two-column colour legend 28u, note 24u) */
+.iso-legend {
+  position: absolute; right: calc(96 * var(--u)); bottom: calc(190 * var(--u)); width: calc(560 * var(--u)); box-sizing: border-box;
+  padding: calc(34 * var(--u)); background: var(--iso-paper); border: var(--iso-line) solid var(--iso-ink); border-radius: calc(14 * var(--u));
+  box-shadow: calc(6 * var(--u)) calc(8 * var(--u)) 0 var(--iso-card-shadow);
+}
+.iso-legend-items { display: grid; grid-template-columns: 1fr 1fr; gap: calc(14 * var(--u)); font-size: calc(28 * var(--u)); font-weight: 500; }

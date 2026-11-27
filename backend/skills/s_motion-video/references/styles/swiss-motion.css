@@ -1,0 +1,161 @@
+/* swiss-motion.css — Swiss Motion Typography style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ * System fonts only; no imports, no url(), no web fonts. GSAP animates transforms/opacity only;
+ * these classes set initial layout, never CSS animation or transition.
+ * Inside .sw-artifact sizes are paper px (706 x 1008 sheet); the camera scale already contains u.
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* palette */
+  --sw-page: #EAE9E5;
+  --sw-paper: #FFFFFF;
+  --sw-ink: #111111;
+  --sw-signal: #E30613;           /* one per film: red; alt #FF5A00 orange (page #F2F0EA, ink #141414),
+                                     #1F3FFF ultramarine (page #E9ECEF, ink #0B0B0B), #00A651 green */
+  --sw-grid: #CFCEC9;             /* page grid, grid extension */
+  --sw-grid-build: #C9C8C2;       /* paper grid while building */
+  --sw-grid-paper: #E2E1DC;       /* paper grid once built */
+  --sw-second: #CFCEC9;           /* second-voice grey blocks */
+  --sw-mute: #77766F;             /* grey lead, small grey text */
+  --sw-band: #E2E1DC;             /* frame column bands */
+  --sw-wall: #DFDED9;             /* wall board */
+
+  /* font: one typeface, many weights */
+  --sw-sans: "Helvetica Neue", -apple-system, "SF Pro Text", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+
+  /* type scale */
+  --sw-fs-title: calc(120 * var(--u));
+  --sw-fs-statement: calc(76 * var(--u));
+  --sw-fs-lead: calc(30 * var(--u));
+  --sw-fs-note: calc(19 * var(--u));
+  --sw-fs-label: calc(26 * var(--u));      /* 22-26 */
+  --sw-fs-small: calc(18 * var(--u));      /* bar counter */
+  --sw-fs-caption: calc(40 * var(--u));
+  --sw-numeral-h: calc(700 * var(--u));    /* digit height, 65% of 1080 */
+  --sw-numeral-ratio: .714;                /* digit height / em for Helvetica Neue (0.667 for Noto Sans CJK) */
+
+  /* grid: 12 columns, margin 5% W, gutter 24u */
+  --sw-cols: 12;
+  --sw-margin: calc(100vw * .05);
+  --sw-gutter: calc(24 * var(--u));
+  --sw-baseline: calc(24 * var(--u));
+  --sw-col: calc((100vw - 2 * var(--sw-margin) - 11 * var(--sw-gutter)) / 12);
+
+  /* captions (drawn by the runtime): museum label, top rule, left-aligned at column 0, 8 columns wide */
+  --cap-bg: transparent;
+  --cap-fg: #111111;
+  --cap-font: var(--sw-sans);
+  --cap-size: calc(40 * var(--u));
+  --cap-radius: 0;
+  --cap-bottom: calc(48 * var(--u));
+  --cap-weight: 500;
+  --cap-accent: none;
+  --cap-shadow: none;
+  --cap-border: 1px solid #111111;
+}
+@media (orientation: portrait) {
+  :root {
+    --sw-cols: 6;
+    --sw-margin: calc(72 * var(--u));
+    --sw-col: calc((100vw - 2 * var(--sw-margin) - 5 * var(--sw-gutter)) / 6);
+    --sw-numeral-h: calc(100vh * .2);
+  }
+}
+
+/* stage: flat page, no light, no vignette */
+.sw-stage {
+  position: absolute; inset: 0; overflow: hidden;
+  background: var(--sw-page); font-family: var(--sw-sans); color: var(--sw-ink);
+}
+.sw-layer { position: absolute; inset: 0; }          /* #program layer (slides -1200u) */
+
+/* column placement: style="--c:4; --n:2" */
+.sw-col {
+  position: absolute;
+  left: calc(var(--sw-margin) + var(--c, 0) * (var(--sw-col) + var(--sw-gutter)));
+  width: calc(var(--n, 1) * var(--sw-col) + (var(--n, 1) - 1) * var(--sw-gutter));
+}
+.sw-band { top: 0; bottom: 0; background: var(--sw-band); transform: scaleY(0); }  /* set transform-origin at the red line */
+
+/* rules */
+.sw-rule { position: absolute; height: 1px; background: var(--sw-ink); transform-origin: 0 50%; }
+.sw-rule-v { position: absolute; width: 1px; background: var(--sw-ink); transform-origin: 50% 0; }
+.sw-redline { position: absolute; left: 0; width: 100%; height: calc(3 * var(--u)); background: var(--sw-signal); transform-origin: 0 50%; }
+
+/* clip-reveal text: each token = <span class="sw-mask"><span class="sw-tok">word</span></span> */
+.sw-text { position: absolute; display: flex; white-space: pre; line-height: 1.3; }
+.sw-mask { display: inline-block; overflow: hidden; height: 1.3em; vertical-align: top; }
+.sw-mask.sp { margin-right: .28em; }
+.sw-tok { display: block; height: 1.3em; line-height: 1.3em; }
+.sw-title { font-size: var(--sw-fs-title); font-weight: 700; letter-spacing: -.022em; }
+.sw-statement { font-size: var(--sw-fs-statement); font-weight: 700; }
+.sw-statement.soft { font-weight: 400; }
+.sw-lead { font-size: var(--sw-fs-lead); font-weight: 500; color: var(--sw-mute); }
+.sw-note { font-size: var(--sw-fs-note); font-weight: 500; line-height: calc(26 * var(--u)); white-space: nowrap; }
+.sw-label { font-size: var(--sw-fs-label); font-weight: 500; color: var(--sw-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sw-value { font-size: var(--sw-fs-label); font-weight: 700; color: var(--sw-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sw-big { letter-spacing: -.022em; }            /* any text >= 90u; CJK use -.01em */
+
+/* caption row (top): 1px rule over 6 columns at y 36u, items at columns 0/2/4, baseline +30u */
+.sw-caprow { position: absolute; top: calc(36 * var(--u)); left: var(--sw-margin); height: 1px;
+  width: calc(6 * var(--sw-col) + 5 * var(--sw-gutter)); background: var(--sw-ink); transform-origin: 0 50%; }
+/* technical notes: rule (2 columns) + 19u lines, line step 26u */
+.sw-notes-rule { position: absolute; height: 1px; width: calc(2 * var(--sw-col) + var(--sw-gutter)); background: var(--sw-ink); transform-origin: 0 50%; }
+.sw-barcounter { position: absolute; font-size: var(--sw-fs-small); line-height: 1.3; }
+.sw-barcounter .tempo { font-weight: 500; color: var(--sw-mute); }
+.sw-barcounter .bar { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* giant numeral: mask top = base - 1.06 * height; numeral rides yPercent 100 -> 0 */
+.sw-numeral-mask { position: absolute; left: 0; width: 100%; height: calc(1.06 * var(--sw-numeral-h)); overflow: hidden; }
+.sw-numeral {
+  position: absolute; left: calc(var(--sw-margin) - .05em);
+  font-size: calc(var(--sw-numeral-h) / var(--sw-numeral-ratio)); font-weight: 700; letter-spacing: -.04em;
+  line-height: 1.3; white-space: pre; color: var(--sw-ink);
+  top: calc(1.06 * var(--sw-numeral-h) - 1.03 * var(--sw-numeral-h) / var(--sw-numeral-ratio)); /* baseline on mask bottom; verify per font */
+}
+
+/* artifact: camera layer in paper px. GSAP sets x, y, scale, rotation; transform-origin centre */
+.sw-artifact { position: absolute; left: 0; top: 0; width: 706px; height: 1008px; overflow: visible; transform-origin: 50% 50%; }
+.sw-paper { position: absolute; left: 0; top: 0; width: 706px; height: 1008px; overflow: hidden; background: var(--sw-paper);
+  clip-path: inset(0 0 0 0); }                       /* wipe: inset(0 0 100% 0) -> inset(0 0 0% 0) */
+.sw-grid { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; }
+.sw-grid line { stroke: var(--sw-grid-build); stroke-width: 1; }
+.sw-grid.built line { stroke: var(--sw-grid-paper); }
+.sw-grid.ext line { stroke: var(--sw-grid); }
+
+/* unit shapes: 1x1 px, GSAP sets x, y, scaleX = w, scaleY = h (no width/height tweens) */
+.sw-unit { position: absolute; left: 0; top: 0; width: 1px; height: 1px; transform-origin: 0 0; }
+.sw-block { background: var(--sw-ink); }
+.sw-block.second { background: var(--sw-second); }
+.sw-block.signal { background: var(--sw-signal); }
+.sw-exception { background: var(--sw-signal); border-radius: 50%; }
+.sw-exception.square { border-radius: 0; }
+.sw-trail { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; }
+.sw-trail circle, .sw-trail line { fill: none; stroke: var(--sw-signal); stroke-width: 1.5; }
+
+/* readout beside the exception: rule 240u at y - 40u; rows 40u apart; status at +96u */
+.sw-readout-rule { position: absolute; height: 1px; width: calc(240 * var(--u)); background: var(--sw-ink); transform-origin: 0 50%; }
+.sw-off { color: var(--sw-signal); font-weight: 700; }
+.sw-on { color: var(--sw-ink); font-weight: 700; }
+
+/* knife line (2px) and playhead (4px signal), paper px */
+.sw-knife { position: absolute; height: 2px; background: var(--sw-ink); transform-origin: 0 50%; }
+.sw-playhead { position: absolute; left: -24px; width: 754px; height: 4px; margin-top: -2px; background: var(--sw-signal); transform-origin: 0 50%; }
+
+/* wall: board 110 margin, pieces 80 apart, two each side */
+.sw-wall-board { position: absolute; background: var(--sw-wall); transform-origin: 100% 50%; }
+.sw-wall-piece { position: absolute; top: 0; width: 706px; height: 1008px; overflow: hidden; background: var(--sw-paper); transform-origin: 50% 50%; }
+.sw-wall-label { position: absolute; font-size: calc(22 * var(--u)); font-weight: 500; white-space: nowrap; }
+.sw-wall-label.main { font-weight: 700; color: var(--sw-signal); }
+
+/* optional 3D asset: orthographic line drawing (no perspective), white faces, 1.5px ink edges */
+.sw-model { position: absolute; transform-style: preserve-3d; }
+.sw-face { position: absolute; box-sizing: border-box; background: var(--sw-paper); border: 1.5px solid var(--sw-ink); backface-visibility: visible; }
+.sw-face.hot { background: var(--sw-signal); }      /* tween a colour overlay 0 -> 1 over 0.25 s, never flip */
+.sw-progress { position: absolute; left: 34px; top: 968px; width: 638px; height: 3px; background: var(--sw-ink); transform-origin: 0 50%; }

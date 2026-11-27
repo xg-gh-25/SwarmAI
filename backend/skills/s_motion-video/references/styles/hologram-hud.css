@@ -1,0 +1,173 @@
+/* hologram-hud.css — Hologram HUD style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ * System fonts only; no import rules, no url(), no web fonts. GSAP animates transforms/opacity/clip-path only;
+ * these classes set initial layout, never CSS animation or transition.
+ * The wireframe subject, projector pad, scan plane, target boxes and leaders are drawn on a 2D canvas
+ * by the scene (see hologram-hud.md, Technique library); the classes below style the stage,
+ * the HUD frame text and the dark plates (cards, chips, title, footer).
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* palette: one cold hue (default cyan 188) + one warm accent (amber 38) */
+  --hh-bg0: #02080A;                         /* stage, hsl(hue+12,70%,2.4%) */
+  --hh-bg1: #06181D;                         /* radial lift behind the subject, hsl(hue+6,65%,7%) */
+  --hh-line: #70ECFF;                        /* hue line colour hsl(hue,100%,72%): wire, HUD, labels at alpha levels */
+  --hh-line-90: rgba(112, 236, 255, .90);
+  --hh-line-75: rgba(112, 236, 255, .75);
+  --hh-line-55: rgba(112, 236, 255, .55);
+  --hh-line-28: rgba(112, 236, 255, .28);
+  --hh-dim: #2FC3DA;                         /* hsl(hue,70%,52%): index numbers, telemetry, rulers */
+  --hh-dim-70: rgba(47, 195, 218, .70);
+  --hh-dim-35: rgba(47, 195, 218, .35);
+  --hh-hi: #E2F5F8;                          /* heat: near-white of the hue, hsl(hue,60%,93%) */
+  --hh-accent: #FFBC47;                      /* hsl(accent,100%,64%): locked values only */
+  --hh-plate: rgba(1, 8, 12, .72);           /* dark plate under every text block */
+  --hh-plate-sub: rgba(1, 8, 12, .62);       /* caption plate */
+  --hh-tick: rgba(112, 236, 255, .70);       /* plate corner ticks */
+
+  /* fonts (system stand-ins: condensed light caps for values/names, condensed demi for labels, mono for micro data) */
+  --hh-ui: "Avenir Next Condensed", "DIN Alternate", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+  --hh-mono: "SF Mono", Menlo, "PingFang SC", monospace;
+
+  /* type scale */
+  --hh-fs-name: calc(176 * var(--u));        /* product / subject name, weight 200, tracking 26u */
+  --hh-fs-value: calc(136 * var(--u));       /* spec card value, weight 200 (116 in a loupe card) */
+  --hh-fs-sheet: calc(92 * var(--u));        /* final sheet values */
+  --hh-fs-chip: calc(42 * var(--u));         /* docked chip value, weight 400 */
+  --hh-fs-tagline: calc(36 * var(--u));
+  --hh-fs-label: calc(30 * var(--u));        /* card label, 600 caps, tracking 3u */
+  --hh-fs-detail: calc(25 * var(--u));
+  --hh-fs-mono: calc(20 * var(--u));         /* HUD frame text, indices, telemetry (20-22) */
+  --hh-fs-chiplabel: calc(21 * var(--u));
+  --hh-fs-small: calc(18 * var(--u));        /* chip unit, chip index (minimum) */
+
+  /* grid (1920x1080 reference) */
+  --hh-frame-m: calc(44 * var(--u));         /* corner brackets inset */
+  --hh-bracket: calc(46 * var(--u));         /* bracket arm length */
+  --hh-text-x: calc(96 * var(--u));          /* HUD frame text inset (safe area) */
+  --hh-text-y: calc(58 * var(--u));
+  --hh-card-x: calc(1240 * var(--u));        /* spec card column x >= 1240 */
+  --hh-card-y: calc(318 * var(--u));
+  --hh-card-w: calc(470 * var(--u));
+  --hh-rail-x: calc(110 * var(--u));         /* chip rail x 110-470, first chip y 470 */
+  --hh-rail-y: calc(470 * var(--u));
+  --hh-chip-w: calc(360 * var(--u));
+  --hh-title-x: calc(110 * var(--u));        /* name baseline y 262 */
+
+  /* captions (drawn by the runtime): HUD transcript plate */
+  --cap-bg: rgba(1, 8, 12, .62);
+  --cap-fg: #E2F5F8;
+  --cap-font: var(--hh-ui);
+  --cap-size: calc(38 * var(--u));
+  --cap-weight: 500;
+  --cap-radius: 0;
+  --cap-bottom: calc(100 * var(--u));
+  --cap-mark: tick;
+  --cap-accent: #70ECFF;
+  --cap-border: 1px solid rgba(112, 236, 255, .28);
+  --cap-shadow: none;
+}
+@media (orientation: portrait) {
+  :root {
+    --cap-bottom: calc(220 * var(--u));
+    --cap-size: calc(40 * var(--u));
+    --hh-fs-name: calc(150 * var(--u));
+    --hh-fs-value: calc(120 * var(--u));
+    --hh-text-x: calc(60 * var(--u));
+    --hh-card-x: calc(80 * var(--u));      /* cards move under the subject, full width */
+    --hh-card-y: 60%;
+    --hh-card-w: calc(920 * var(--u));
+    --hh-rail-x: calc(80 * var(--u));      /* rail becomes a row under the title */
+    --hh-rail-y: calc(330 * var(--u));
+  }
+}
+
+/* stage: near-black hue-tinted field with a radial lift; the canvas repaints it every frame */
+.hh-stage {
+  position: absolute; inset: 0; overflow: hidden;
+  background: radial-gradient(ellipse 62% 62% at 50% 55%, var(--hh-bg1), var(--hh-bg0));
+  font-family: var(--hh-ui); color: var(--hh-line);
+  -webkit-font-smoothing: antialiased;
+}
+#camera { position: absolute; inset: 0; }
+.hh-canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+/* strong vignette over everything (source k = 0.5: clear inside 0.35 H, black .5 at 0.72 W) */
+.hh-vignette {
+  position: absolute; inset: 0; pointer-events: none; z-index: 60;
+  background: radial-gradient(circle at 50% 50%, rgba(0, 0, 0, 0) calc(378 * var(--u)), rgba(0, 0, 0, .5) calc(1382 * var(--u)));
+}
+
+/* HUD frame text (corner brackets and rulers are canvas lines) */
+.hh-hud { position: absolute; z-index: 50; font: 400 var(--hh-fs-mono)/1 var(--hh-mono); letter-spacing: calc(2 * var(--u));
+  color: var(--hh-line-75); white-space: nowrap; text-transform: uppercase; }
+.hh-hud.tl { left: var(--hh-text-x); top: var(--hh-text-y); }
+.hh-hud.tr { right: var(--hh-text-x); top: var(--hh-text-y); text-align: right; }
+.hh-hud.bl { left: var(--hh-text-x); bottom: var(--hh-text-y); color: var(--hh-dim-70); }
+.hh-hud.br { right: var(--hh-text-x); bottom: var(--hh-text-y); color: var(--hh-dim-70); text-align: right; }
+.hh-sep { padding: 0 calc(18 * var(--u)); opacity: .8; }
+
+/* dark plate: translucent near-black, 1px hue border at .28, 10u corner ticks at .7 (procedural gradients) */
+.hh-plate {
+  position: absolute; background-color: var(--hh-plate);
+  border: 1px solid var(--hh-line-28);
+  background-image:
+    linear-gradient(var(--hh-tick), var(--hh-tick)), linear-gradient(var(--hh-tick), var(--hh-tick)),
+    linear-gradient(var(--hh-tick), var(--hh-tick)), linear-gradient(var(--hh-tick), var(--hh-tick)),
+    linear-gradient(var(--hh-tick), var(--hh-tick)), linear-gradient(var(--hh-tick), var(--hh-tick)),
+    linear-gradient(var(--hh-tick), var(--hh-tick)), linear-gradient(var(--hh-tick), var(--hh-tick));
+  background-repeat: no-repeat;
+  background-size:
+    calc(10 * var(--u)) 1.4px, 1.4px calc(10 * var(--u)), calc(10 * var(--u)) 1.4px, 1.4px calc(10 * var(--u)),
+    calc(10 * var(--u)) 1.4px, 1.4px calc(10 * var(--u)), calc(10 * var(--u)) 1.4px, 1.4px calc(10 * var(--u));
+  background-position: left top, left top, right top, right top, left bottom, left bottom, right bottom, right bottom;
+}
+
+/* spec card: index / label / big value + unit / progress bar / detail, on a plate padded 22u x 20u */
+.hh-card { position: absolute; left: var(--hh-card-x); top: var(--hh-card-y); width: var(--hh-card-w);
+  padding: calc(20 * var(--u)) calc(22 * var(--u)) calc(24 * var(--u)); z-index: 40; }
+.hh-rule { position: relative; height: 1.6px; background: var(--hh-line-90); transform-origin: 0 50%; }
+.hh-rule::before { content: ""; position: absolute; left: 0; top: calc(-3 * var(--u)); width: calc(34 * var(--u)); height: calc(6 * var(--u)); background: var(--hh-line-90); }
+.hh-head { display: flex; align-items: baseline; gap: calc(22 * var(--u)); margin-top: calc(18 * var(--u)); white-space: nowrap; }
+.hh-idx { font: 400 var(--hh-fs-mono)/1 var(--hh-mono); color: var(--hh-dim); }
+.hh-label { font: 600 var(--hh-fs-label)/1 var(--hh-ui); letter-spacing: calc(3 * var(--u)); color: var(--hh-hi); text-transform: uppercase; }
+.hh-value { display: flex; align-items: baseline; gap: calc(10 * var(--u)); margin-top: calc(6 * var(--u)); white-space: nowrap;
+  font: 200 var(--hh-fs-value)/1 var(--hh-ui); font-variant-numeric: tabular-nums; color: var(--hh-line); }
+.hh-value .hh-unit { font-size: .3em; font-weight: 500; letter-spacing: 0; opacity: .6; }
+.hh-value.is-locked, .hh-value.is-locked .hh-unit { color: var(--hh-accent); opacity: 1; }
+.hh-value.is-flash, .hh-value.is-flash .hh-unit { color: var(--hh-hi); }
+.hh-dp { display: inline-block; width: .13em; height: .13em; margin: 0 .07em; background: currentColor; }   /* decimal point = small square */
+.hh-bar { position: relative; height: 2px; margin-top: calc(10 * var(--u)); background: var(--hh-dim-35); }
+.hh-bar > i { position: absolute; inset: 0; background: var(--hh-line); transform-origin: 0 50%; }
+.hh-bar.is-locked > i { background: var(--hh-accent); }
+.hh-detail { margin-top: calc(14 * var(--u)); font: 500 var(--hh-fs-detail)/1.2 var(--hh-ui); color: var(--hh-line-90); white-space: nowrap; }
+
+/* docked chip in the side rail: label left, value + unit right (accent), detail under */
+.hh-chip { position: absolute; left: var(--hh-rail-x); width: var(--hh-chip-w); padding: calc(16 * var(--u)); z-index: 40; }
+.hh-chip .hh-rule { height: 1px; background: var(--hh-line-55); }
+.hh-chip .hh-rule::before { top: calc(-2 * var(--u)); width: calc(14 * var(--u)); height: calc(4 * var(--u)); }
+.hh-chip-row { display: flex; align-items: baseline; margin-top: calc(10 * var(--u)); white-space: nowrap; }
+.hh-chip-row .hh-idx { font-size: var(--hh-fs-small); width: calc(40 * var(--u)); }
+.hh-chip-label { flex: 1; font: 600 var(--hh-fs-chiplabel)/1 var(--hh-ui); letter-spacing: calc(2 * var(--u)); color: var(--hh-line); text-transform: uppercase; }
+.hh-chip-val { font: 400 var(--hh-fs-chip)/1 var(--hh-ui); font-variant-numeric: tabular-nums; color: var(--hh-accent); }
+.hh-chip-val .hh-unit { font-size: var(--hh-fs-small); font-weight: 500; margin-left: calc(6 * var(--u)); }
+.hh-chip-detail { margin: calc(6 * var(--u)) 0 0 calc(40 * var(--u)); font: 500 calc(20 * var(--u))/1 var(--hh-ui); color: var(--hh-line-75); white-space: nowrap; }
+
+/* title block (no title card: the name rolls in like a value) */
+.hh-title { position: absolute; left: var(--hh-title-x); top: calc(120 * var(--u)); z-index: 40; white-space: nowrap; }
+.hh-name { font: 200 var(--hh-fs-name)/1 var(--hh-ui); letter-spacing: calc(26 * var(--u)); color: var(--hh-hi); text-transform: uppercase; }
+.hh-title .hh-rule { width: calc(360 * var(--u)); height: 2px; margin-top: calc(14 * var(--u)); }
+.hh-title .hh-rule::before { display: none; }
+.hh-code { margin-top: calc(22 * var(--u)); font: 400 calc(22 * var(--u))/1 var(--hh-mono); letter-spacing: calc(2 * var(--u)); color: var(--hh-line-90); text-transform: uppercase; }
+.hh-tagline { margin-top: calc(22 * var(--u)); font: 500 var(--hh-fs-tagline)/1.1 var(--hh-ui); color: rgba(226, 245, 248, .85); }
+
+/* final sheet values and call to action */
+.hh-sheet-label { font: 400 var(--hh-fs-mono)/1 var(--hh-mono); color: var(--hh-dim); letter-spacing: calc(2 * var(--u)); text-transform: uppercase; }
+.hh-sheet-val { font-size: var(--hh-fs-sheet); }
+.hh-cta { display: inline-block; padding: calc(12 * var(--u)) calc(15 * var(--u)); border: 1.5px solid var(--hh-accent);
+  font: 600 calc(21 * var(--u))/1 var(--hh-ui); letter-spacing: calc(2 * var(--u)); color: var(--hh-accent); text-transform: uppercase; white-space: nowrap; }

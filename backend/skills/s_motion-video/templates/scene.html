@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>S01</title>
+<!-- 1. runtime first: GSAP, then the scene runtime (sets --u, window.MV, captions, __mvSeek) -->
+<script src="/skill/runtime/gsap.min.js"></script>
+<script src="/skill/runtime/scene-runtime.js"></script>
+<!-- 2. the film's style (file name = storyboard "style"), then the project's optional shared styles -->
+<link rel="stylesheet" href="/skill/references/styles/exec-brief.css">
+<link rel="stylesheet" href="/project/scenes/shared.css">
+<!-- 3. scene layout only: sizes calc(N * var(--u)) (= N px at a 1080 short side), colours from style tokens -->
+<style>
+  .title { position: absolute; left: var(--eb-margin); top: var(--eb-top); margin: 0; }
+  .list  { position: absolute; left: var(--eb-margin); top: calc(400 * var(--u)); width: calc(760 * var(--u)); }
+  .list .eb-item { font-size: calc(46 * var(--u)); white-space: nowrap; }
+  .stat  { position: absolute; right: var(--eb-margin); top: calc(330 * var(--u)); width: calc(640 * var(--u)); }
+  .bars  { display: flex; align-items: flex-end; gap: calc(28 * var(--u)); height: calc(260 * var(--u));
+           margin-top: calc(36 * var(--u)); border-bottom: 1px solid var(--eb-rule); }
+  .bar   { flex: 1; background: var(--eb-rule); }
+  .bar.hi { background: var(--eb-accent); }
+</style>
+</head>
+<body>
+<div id="stage" class="eb-stage">
+  <div id="camera">
+    <h1 class="eb-statement title" id="title"><span class="eb-line">Cloud bill <span class="eb-em">-40%</span></span></h1>
+    <div class="list" id="list">
+      <div class="eb-item accent">Rightsizing</div>
+      <div class="eb-item">Spot capacity</div>
+      <div class="eb-item">Storage tiers</div>
+    </div>
+    <div class="stat" id="stat">
+      <div class="eb-stat"><span class="eb-stat-num" id="num">0</span><span class="eb-stat-unit">days</span></div>
+      <div class="bars">
+        <div class="bar" style="height:100%"></div>
+        <div class="bar" style="height:80%"></div>
+        <div class="bar hi" style="height:60%"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  // One paused timeline. Every tween is fromTo (or set) at an ABSOLUTE time taken from MV.cue(keyword).
+  const tl = gsap.timeline({ paused: true, defaults: { ease: "power3.out", duration: 0.6 } });
+  const T = MV.duration, u = MV.u;
+
+  // shot-long slow push: the frame is never fully still
+  tl.fromTo("#camera", { scale: 1 }, { scale: 1.03, duration: T, ease: "none", transformOrigin: "50% 45%" }, 0);
+
+  // 1) title on its keyword
+  tl.fromTo("#title", { opacity: 0, y: 40 * u }, { opacity: 1, y: 0, duration: 0.7 }, MV.cue("cloud bill"));
+
+  // 2) progressive reveal: each item appears about 0.1 s before it is spoken
+  const items = gsap.utils.toArray("#list .eb-item");
+  ["rightsizing", "spot", "storage"].forEach((kw, i) => {
+    tl.fromTo(items[i], { opacity: 0, x: -50 * u }, { opacity: 1, x: 0, duration: 0.5 }, MV.cue(kw));
+  });
+
+  // 3) stat + bars on "quarter"; clamped so the last move (0.6 s + 2 x 0.12 s stagger) settles by MV.end()
+  const tStat = Math.min(MV.cue("quarter"), MV.end() - 0.84);
+  const counter = { v: 0 }, num = document.getElementById("num");
+  tl.fromTo("#stat", { opacity: 0, y: 30 * u }, { opacity: 1, y: 0, duration: 0.5 }, tStat);
+  tl.fromTo(counter, { v: 0 }, { v: 90, duration: 0.6, ease: "power1.out",
+            onUpdate: () => { num.textContent = Math.round(counter.v); } }, tStat);
+  tl.fromTo("#stat .bar", { scaleY: 0, transformOrigin: "50% 100%" }, { scaleY: 1, duration: 0.6, stagger: 0.12 }, tStat);
+
+  MV.register(tl);   // last: register after every tween is added
+</script>
+</body>
+</html>

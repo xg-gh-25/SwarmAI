@@ -1,0 +1,193 @@
+/* game-show.css — Game Show Flat style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every HTML size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ *   Inside the stage SVG (viewBox "0 0 1920 1080", portrait "0 0 1080 1920") one user unit IS one u,
+ *   so the .gs-* SVG classes below give stroke widths and font sizes as plain numbers (user units).
+ * System fonts only; no imports, no remote or local file URLs, no web fonts. GSAP animates transforms/opacity only;
+ * these classes set initial layout, never CSS animation or transition.
+ * Textures: none. The look is flat fills + one ink outline + hard offset shadows; patterns are gradients.
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* ink + paper */
+  --gs-ink: #1B1B1B;          /* every outline, hard shadow, name-tag pill, body text on cream */
+  --gs-white: #FFFFFF;        /* telop fill, mitten hands, eye catch-lights, burst ring */
+  --gs-cream: #FFF6E5;        /* cards, report cards, paper props */
+
+  /* candy hues (characters, props, set grounds) */
+  --gs-yellow: #FFD23F; --gs-orange: #FF8C42; --gs-red: #FF5A5F; --gs-pink: #FF8FB1;
+  --gs-green: #5BD68A;  --gs-lime: #C6F16D;   --gs-sky: #8ED1FC; --gs-blue: #4D7CFE;
+  /* deep hues with partners (night, finale, quiz sets) */
+  --gs-purple: #6B4FBB; --gs-purple-d: #46318F;
+  --gs-teal: #3FB8AF;   --gs-teal-d: #2B8F88;
+  --gs-navy: #26264A;   --gs-navy-d: #1A1A36;
+  /* props */
+  --gs-wood: #C98A52; --gs-wood-d: #8E5530; --gs-steel: #C3CAD9; --gs-blush: #FF9FB8;
+
+  /* the current set (override per scene with a .gs-set-* class on #stage) */
+  --gs-ground: #FF5A5F;       /* full-frame background */
+  --gs-pat: #FF7276;          /* pattern: same hue, mix(ground, white, .15) for dots, or one step off for stripes */
+  --gs-floor: #D14D51;        /* floor band: mix(ground, ink, .20) */
+
+  /* fonts */
+  /* Latin + numbers: heavy rounded (Arial Rounded MT Bold resolves in headless Chromium; SF Pro Rounded does not) */
+  --gs-round: "Arial Rounded MT Bold", "SF Pro Rounded", "Hiragino Sans GB", "PingFang SC", sans-serif;
+  /* CJK + plain heavy text: Hiragino Sans GB W6 is the heaviest simplified-Chinese system face */
+  --gs-black: "Hiragino Sans GB", "PingFang SC", "Noto Sans CJK SC", "Helvetica Neue", sans-serif;
+  --gs-hand: "Chalkboard SE", "Marker Felt", "HanziPen SC", "Hannotate SC", cursive;
+
+  /* type scale (u) */
+  --gs-fs-title: calc(200 * var(--u));   /* film title, glyph-by-glyph pop */
+  --gs-fs-card: calc(130 * var(--u));    /* round-card name (fit to 720u) */
+  --gs-fs-judge: calc(120 * var(--u));   /* judgement word */
+  --gs-fs-big: calc(150 * var(--u));     /* scoreboard / counter number */
+  --gs-fs-year: calc(64 * var(--u));     /* banner year / round number */
+  --gs-fs-name: calc(54 * var(--u));     /* banner name */
+  --gs-fs-tagline: calc(56 * var(--u));  /* card years / tag line */
+  --gs-fs-sub: calc(34 * var(--u));      /* banner subtitle, plate text */
+  --gs-fs-tag: calc(34 * var(--u));      /* name tag */
+
+  /* line + depth */
+  --gs-ow: calc(8 * var(--u));           /* outline: characters and props */
+  --gs-ow-s: calc(6 * var(--u));         /* small parts (hands, marks, icons) 5-7 */
+  --gs-ow-card: calc(10 * var(--u));     /* round card */
+  --gs-sh: calc(10 * var(--u));          /* hard shadow: stickers, banners, tags */
+  --gs-sh-card: calc(14 * var(--u));     /* hard shadow: cards */
+
+  /* grid */
+  --gs-safe-x: calc(96 * var(--u));
+  --gs-safe-y: calc(54 * var(--u));
+  --gs-floor-y: calc(790 * var(--u));    /* floor top line (characters' feet); name tags sit just below */
+  --gs-banner-x: calc(128 * var(--u));   /* inside the 5 % safe area even after a 3 % push */
+  --gs-banner-y: calc(84 * var(--u));
+
+  /* captions (drawn by the runtime): an outlined telop plate, not a thin caption */
+  --cap-bg: #FFF6E5;
+  --cap-fg: #1B1B1B;
+  --cap-font: var(--gs-black);
+  --cap-size: calc(46 * var(--u));
+  --cap-weight: 900;
+  --cap-radius: calc(26 * var(--u));
+  --cap-bottom: calc(48 * var(--u));
+  --cap-border: calc(6 * var(--u)) solid #1B1B1B;
+  --cap-shadow: calc(8 * var(--u)) calc(8 * var(--u)) 0 #1B1B1B;
+  --cap-accent: #FFD23F;
+  --cap-mark: dot;
+}
+@media (orientation: portrait) {
+  :root {
+    --cap-bottom: calc(220 * var(--u));
+    --cap-size: calc(44 * var(--u));
+    --gs-safe-x: calc(60 * var(--u));
+    --gs-floor-y: calc(1380 * var(--u));
+    --gs-fs-title: calc(150 * var(--u));
+    --gs-fs-judge: calc(110 * var(--u));
+  }
+}
+
+/* set colour presets: ground / pattern / floor (one set = one hue; neighbours never share a hue) */
+.gs-set-red     { --gs-ground: #FF5A5F; --gs-pat: #FF7276; --gs-floor: #D14D51; }
+.gs-set-tangerine { --gs-ground: #FFB870; --gs-pat: #FFA85A; --gs-floor: #E08A4A; }
+.gs-set-yellow  { --gs-ground: #FFD23F; --gs-pat: #FFDD6A; --gs-floor: #D6AE2E; }
+.gs-set-green   { --gs-ground: #5BD68A; --gs-pat: #78DD9F; --gs-floor: #4CAF72; }
+.gs-set-sky     { --gs-ground: #8ED1FC; --gs-pat: #A5DAFC; --gs-floor: #75AAD0; }
+.gs-set-blue    { --gs-ground: #4D7CFE; --gs-pat: #6890FE; --gs-floor: #4066CF; }
+.gs-set-pink    { --gs-ground: #FF8FB1; --gs-pat: #FFA5C1; --gs-floor: #D27691; }
+.gs-set-purple  { --gs-ground: #6B4FBB; --gs-pat: #8169C5; --gs-floor: #46318F; }
+.gs-set-teal    { --gs-ground: #3FB8AF; --gs-pat: #5CC3BB; --gs-floor: #2B8F88; }
+.gs-set-navy    { --gs-ground: #26264A; --gs-pat: #34345E; --gs-floor: #1A1A36; }
+
+/* stage + set layers */
+.gs-stage {
+  position: absolute; inset: 0; overflow: hidden; background: var(--gs-ground);
+  font-family: var(--gs-black); color: var(--gs-ink);
+}
+#camera, #punch, .gs-layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.gs-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+
+/* diagonal candy stripes: <div class="gs-stripes"><i></i></div>. The box is oversized and rotated -25deg;
+   scroll the inner <i> with x 0 -> 2w (one period, 140u at w = 70u), ease none, finite repeat. */
+.gs-stripes {
+  --w: calc(70 * var(--u)); position: absolute; left: -50%; top: -50%; width: 200%; height: 200%;
+  transform: rotate(-25deg); pointer-events: none;
+}
+.gs-stripes > i {
+  position: absolute; top: 0; bottom: 0; left: calc(-4 * var(--w)); right: calc(-4 * var(--w));
+  background: repeating-linear-gradient(90deg, var(--gs-pat) 0 var(--w), transparent var(--w) calc(2 * var(--w)));
+}
+/* offset polka dots: step 90u, radius 12u, every other row offset by half a step */
+.gs-dots {
+  --s: calc(90 * var(--u)); --r: calc(12 * var(--u)); position: absolute; left: calc(-1 * var(--s)); top: calc(-1 * var(--s));
+  width: calc(100% + 2 * var(--s)); height: calc(100% + 2 * var(--s));
+  background-image:
+    radial-gradient(circle, var(--gs-pat) var(--r), transparent calc(var(--r) + .7px)),
+    radial-gradient(circle, var(--gs-pat) var(--r), transparent calc(var(--r) + .7px));
+  background-size: var(--s) var(--s), var(--s) var(--s);
+  background-position: 0 0, calc(var(--s) / 2) calc(var(--s) / 2);
+}
+/* sunburst: 24 hard-edged rays around the centre; rotate it slowly (about 6 deg per bar) */
+.gs-rays {
+  position: absolute; left: 50%; top: 50%; width: calc(2600 * var(--u)); height: calc(2600 * var(--u));
+  margin: calc(-1300 * var(--u)) 0 0 calc(-1300 * var(--u)); border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg, var(--gs-pat) 0 7.5deg, transparent 7.5deg 15deg);
+}
+/* floor band with an ink line on top */
+.gs-floor {
+  position: absolute; left: 0; right: 0; top: var(--gs-floor-y); bottom: 0;
+  background: var(--gs-floor); border-top: var(--gs-ow) solid var(--gs-ink);
+}
+.gs-floor.flat { border-top: 0; }     /* the dot-set variant: a darker band, no line */
+/* white cut flash on the first frames after a hard cut (tween opacity .5 -> 0 in 0.25 s, expo.out) */
+.gs-flash { position: absolute; inset: 0; background: #FFFFFF; opacity: 0; pointer-events: none; z-index: 90; }
+
+/* round card: cream panel, 10u ink outline, 14u hard shadow, radius 50u, colour pill tag on top */
+.gs-card {
+  position: absolute; box-sizing: border-box; background: var(--gs-cream);
+  border: var(--gs-ow-card) solid var(--gs-ink); border-radius: calc(50 * var(--u));
+  box-shadow: var(--gs-sh-card) var(--gs-sh-card) 0 var(--gs-ink);
+}
+.gs-pill {
+  display: inline-block; box-sizing: border-box; padding: 0 calc(30 * var(--u)); height: calc(80 * var(--u));
+  line-height: calc(64 * var(--u)); border: var(--gs-ow) solid var(--gs-ink); border-radius: calc(40 * var(--u));
+  background: var(--gs-ground); white-space: nowrap;
+}
+
+/* corner sticker banner: drawn in the stage SVG (see game-show.md, sticker()); tokens --gs-banner-x/y place it. */
+
+/* name tag pill under a character's feet */
+.gs-tag {
+  position: absolute; box-sizing: border-box; height: calc(50 * var(--u)); padding: 0 calc(18 * var(--u));
+  background: var(--gs-ink); border: calc(4 * var(--u)) solid #FFFFFF; border-radius: calc(25 * var(--u));
+  font: 700 var(--gs-fs-tag)/calc(42 * var(--u)) var(--gs-round); color: #FFFFFF; white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+/* plate: a cream box with ink outline for short telop lines and counters (<= 12 CJK / about 20 Latin chars) */
+.gs-plate {
+  position: absolute; box-sizing: border-box; padding: calc(12 * var(--u)) calc(30 * var(--u));
+  background: var(--gs-cream); border: var(--gs-ow-s) solid var(--gs-ink); border-radius: calc(26 * var(--u));
+  box-shadow: var(--gs-sh) var(--gs-sh) 0 var(--gs-ink); font: 900 var(--gs-fs-sub)/1.2 var(--gs-black); white-space: nowrap;
+}
+
+/* Outlined telop text is ALWAYS stage-SVG text (.gs-t below): HTML -webkit-text-stroke draws mitre spikes
+   on A, V, W, M and cannot round its joins. HTML text in this style is plain ink or white only (plates, tags). */
+
+/* SVG drawing kit (inside the stage SVG: numbers are user units = u) */
+.gs-ol { stroke: #1B1B1B; stroke-width: 8; stroke-linejoin: round; stroke-linecap: round; }
+.gs-ol-s { stroke: #1B1B1B; stroke-width: 6; stroke-linejoin: round; stroke-linecap: round; }
+.gs-ink { fill: #1B1B1B; }
+.gs-shadow { fill: #1B1B1B; }    /* the same shape, drawn first, shifted (10, 10) or (14, 14) */
+.gs-t {      /* SVG telop text: stroke under the fill */
+  font-family: var(--gs-round); font-weight: 700; fill: #FFFFFF; stroke: #1B1B1B;
+  stroke-linejoin: round; paint-order: stroke; text-anchor: middle; white-space: pre;
+}
+.gs-t.cjk { font-family: var(--gs-black); font-weight: 900; }
+.gs-t.yellow { fill: #FFD23F; }
+.gs-t.pink { fill: #FF8FB1; }
+.gs-t.ink { fill: #1B1B1B; stroke: none; }
+.gs-t.start { text-anchor: start; }   /* the class wins over a text-anchor attribute */

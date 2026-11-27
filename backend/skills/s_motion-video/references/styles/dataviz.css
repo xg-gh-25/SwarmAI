@@ -1,0 +1,164 @@
+/* dataviz.css — Data Story style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ * System fonts only; no imports, no url(), no web fonts. GSAP animates transforms/opacity only;
+ * these classes set initial layout, never CSS animation or transition.
+ *
+ * WORLD UNITS: everything inside the SVG camera group (#camera, transform scale(zoom*u)) is in
+ *   world units = 1080p px at zoom 1. World-layer classes (.dv-w-*) therefore use plain user units
+ *   (stroke-width: 1.5; font-size: 66px), NOT var(--u): the camera scale already applies u.
+ *   Screen-layer classes (frozen strip, captions band, kicker) use var(--u).
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* palette */
+  --dv-paper: #F6F3EC;
+  --dv-dotgrid: #E4DDCF;
+  --dv-ink: #2B2723;
+  --dv-ink-soft: #6E665C;
+  --dv-rule: #DDD6C9;
+  --dv-zero: #BDB4A5;
+  --dv-blue: #2F5D8A;            /* memory, human notes */
+  --dv-red: #A8283A;             /* record, warning, unknown, empty cell */
+  --dv-graphite: #3A3733;
+  --dv-wood: #E3C79C;
+  --dv-wood-dark: #C9A774;
+  --dv-lead-blue: #274E75;
+  --dv-lead-red: #8E2232;
+  --dv-shadow: rgb(70, 50, 30);
+  --dv-accent: #D97757;          /* the one accent: non-data marks only */
+
+  /* diverging ramp stops, u = (v - center) / half (interpolate in JS; listed for reference) */
+  --dv-ramp-n100: #2166AC; --dv-ramp-n72: #4393C3; --dv-ramp-n45: #92C5DE; --dv-ramp-n20: #D1E5F0;
+  --dv-ramp-0: #F2EEE8;
+  --dv-ramp-p20: #FDDBC7; --dv-ramp-p45: #F4A582; --dv-ramp-p72: #D6604D; --dv-ramp-p100: #B2182B; --dv-ramp-p140: #7A0F1E;
+  /* sequential ramp: 0 #F2EEE8, .25 #FDDBC7, .5 #F4A582, .75 #D6604D, 1 #B2182B */
+
+  /* fonts */
+  --dv-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+  --dv-mono: "SF Mono", Menlo, "PingFang SC", monospace;
+  --dv-hand: "Chalkboard SE", "Bradley Hand", "Marker Felt", "Hannotate SC", "HanziPen SC", "Kaiti SC", cursive;
+
+  /* type scale, screen layer (u) */
+  --dv-fs-caption: calc(42 * var(--u));     /* min 34u */
+  --dv-fs-kicker: calc(18 * var(--u));
+  --dv-fs-ytick: calc(18 * var(--u));
+  --dv-fs-note0: calc(15 * var(--u));       /* zero-line note */
+  /* type scale, world layer (w, plain px inside #camera): title 66, subline 17, tick 17, hand 30, value 15 */
+
+  /* grid / world reference */
+  --dv-dot-step: 24;                         /* w */
+  --dv-plot-w: 1500; --dv-plot-h: 520; --dv-per-year: 15;
+  --dv-strip: calc(118 * var(--u));          /* frozen pane strip */
+  --dv-cap-x: 9.4vw;                         /* caption left edge */
+
+  /* captions (drawn by the runtime) */
+  --cap-bg: rgba(246, 243, 236, .94);
+  --cap-fg: #2B2723;
+  --cap-font: var(--dv-sans);
+  --cap-size: calc(42 * var(--u));
+  --cap-radius: 0;
+  --cap-bottom: calc(86 * var(--u));
+  --cap-weight: 400;
+  --cap-accent: #2B2723;
+  --cap-shadow: none;
+  --cap-border: 1px solid rgba(43, 39, 35, .9);   /* top edge only */
+}
+@media (orientation: portrait) {
+  :root {
+    --cap-bottom: calc(260 * var(--u));
+    --dv-cap-x: 7vw;
+    --dv-fs-kicker: calc(23 * var(--u));     /* x1.3 */
+    --dv-fs-ytick: calc(23 * var(--u));
+    --dv-plot-w: 850; --dv-plot-h: 660; --dv-per-year: 8.5;
+  }
+}
+
+/* stage: flat cream paper, no vignette. One full-frame <svg class="dv-svg"> inside;
+   world in <g id="camera">, screen overlays (frozen strip, pencil) after it. */
+.dv-stage {
+  position: absolute; inset: 0; overflow: hidden;
+  background: var(--dv-paper); color: var(--dv-ink); font-family: var(--dv-sans);
+}
+.dv-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; }
+
+/* lighter-port dot grid as CSS on a world-sized div (use the SVG pattern in the full port) */
+.dv-dots {
+  position: absolute; inset: 0; pointer-events: none; opacity: .9;
+  background-image: radial-gradient(circle, var(--dv-dotgrid) calc(1.6 * var(--u)), transparent calc(1.7 * var(--u)));
+  background-size: calc(24 * var(--u)) calc(24 * var(--u));
+  background-position: calc(-12 * var(--u)) calc(-12 * var(--u));
+}
+
+/* world layer: chart skeleton (user units) */
+.dv-w-grid { stroke: var(--dv-rule); stroke-width: 1; fill: none; }
+.dv-w-zero { stroke: var(--dv-zero); stroke-width: 1.3; fill: none; }
+.dv-w-axis { stroke: var(--dv-ink); stroke-width: 1.5; stroke-linecap: round; fill: none; }
+.dv-w-drop { stroke: var(--dv-ink-soft); stroke-width: 1; stroke-dasharray: 3 5; stroke-linecap: round; opacity: .8; fill: none; }
+.dv-w-xtick { stroke: var(--dv-ink); stroke-width: 1.2; }
+.dv-w-ceiling { stroke: var(--dv-ink); stroke-width: 1.4; fill: none; }
+.dv-w-scar { stroke: var(--dv-ink); stroke-width: 1; fill: none; }
+
+/* world layer: data marks */
+.dv-w-series { stroke: var(--dv-ink); stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.dv-w-series.heavy { stroke-width: 3; }
+.dv-w-dot { stroke: var(--dv-ink); stroke-width: 1.5; }        /* fill = value colour, r 6 (heavy 8-10, ring 2) */
+.dv-w-ripple { fill: none; stroke-width: 1.2; }               /* stroke = dot colour */
+.dv-w-stripe { shape-rendering: crispEdges; }
+.dv-w-hatch { stroke: rgb(40, 30, 20); stroke-width: 1; }      /* opacity .12 x hatch x (.5 + .5 hash) per line */
+
+/* world layer: pencil work (wrap each group in the #dv-grain filter) */
+.dv-w-stroke { fill: none; stroke: var(--dv-graphite); stroke-linecap: round; stroke-linejoin: round; }
+.dv-w-stroke.blue { stroke: var(--dv-blue); }
+.dv-w-stroke.red { stroke: var(--dv-red); }
+.dv-w-stroke.ink { stroke: var(--dv-ink); }
+.dv-w-ring { stroke-width: 1.6; }
+.dv-w-leader { stroke-width: 1.4; }
+.dv-w-doodle { stroke-width: 1.7; }
+.dv-w-cell { fill: none; stroke: var(--dv-red); stroke-width: 1.6; stroke-linecap: round; }   /* dashes 9 / 7 built as paths */
+
+/* world layer: type (SVG <text>, one per glyph when animated) */
+.dv-w-title { font-family: var(--dv-sans); font-size: 66px; font-weight: 700; fill: var(--dv-ink); }
+.dv-w-sub { font-family: var(--dv-sans); font-size: 17px; font-weight: 400; fill: var(--dv-ink-soft); }
+.dv-w-tick { font-family: var(--dv-mono); font-size: 17px; fill: var(--dv-ink-soft); font-variant-numeric: tabular-nums; text-anchor: middle; }
+.dv-w-tick.strong { fill: var(--dv-ink); }
+.dv-w-value { font-family: var(--dv-mono); font-size: 15px; fill: var(--dv-ink-soft); font-variant-numeric: tabular-nums; }
+.dv-w-hand { font-family: var(--dv-hand); font-size: 30px; font-weight: 500; fill: var(--dv-blue); }
+.dv-w-hand.red { fill: var(--dv-red); }
+.dv-w-accent { fill: var(--dv-accent); stroke: none; }        /* sparkle, logo: never data */
+
+/* screen layer: frozen pane (SVG, sizes in screen px computed from u in JS; these set colour) */
+.dv-s-strip { fill: var(--dv-paper); opacity: .96; }          /* 118u wide, + 57u paper-to-clear gradient */
+.dv-s-strip-rule { stroke: var(--dv-rule); stroke-width: 1; } /* at x = 124.5u */
+.dv-s-chip { fill: var(--dv-paper); }                         /* 66 x 22u behind each label */
+.dv-s-ytick { font-family: var(--dv-mono); font-size: var(--dv-fs-ytick); fill: var(--dv-ink-soft); font-variant-numeric: tabular-nums; text-anchor: end; }
+.dv-s-ytick.strong { fill: var(--dv-ink); }
+.dv-s-note0 { font-family: var(--dv-mono); font-size: var(--dv-fs-note0); fill: var(--dv-ink-soft); }
+
+/* screen layer: pencil shadow / parts (geometry in the .md) */
+.dv-s-pencil-shadow { fill: var(--dv-shadow); }
+.dv-s-wood { fill: var(--dv-wood); }
+.dv-s-lead.blue { fill: var(--dv-lead-blue); }
+.dv-s-lead.red { fill: var(--dv-lead-red); }
+
+/* caption legend parts the scene draws itself (runtime draws the text) */
+.dv-capband {
+  position: absolute; left: 0; right: 0; top: 78.7%; bottom: 0; pointer-events: none; z-index: 40;
+  background: linear-gradient(180deg, rgba(246, 243, 236, 0) 0, rgba(246, 243, 236, .94) calc(75 * var(--u)), rgba(246, 243, 236, .94) 100%);
+}
+.dv-caprule {
+  position: absolute; left: var(--dv-cap-x); width: min(calc(1380 * var(--u)), calc(100vw - 2 * var(--dv-cap-x)));
+  height: 1px; background: var(--dv-ink); opacity: .9; z-index: 41;
+}
+.dv-capkicker {
+  position: absolute; left: var(--dv-cap-x); z-index: 41; white-space: nowrap;
+  font: 400 var(--dv-fs-kicker) var(--dv-mono); color: var(--dv-ink-soft); font-variant-numeric: tabular-nums;
+}
+@media (orientation: portrait) {
+  .dv-capband { top: 74%; }
+}

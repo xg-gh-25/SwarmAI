@@ -1,0 +1,295 @@
+/* ink-wash.css — Chinese ink painting (shuimo) style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ * Painting units: the ink layer is one inline <svg class="iw-ink"> whose viewBox is the frame in u
+ *   (1920 x 1080 landscape, 1080 x 1920 portrait), so every number inside it is already in u.
+ * System fonts only; no imports, no remote url(), no web fonts, no bitmaps. The only url() here is a
+ *   data: SVG of procedural noise (rice paper). The ink filters (#iw-wet, #iw-dry, #iw-edge, #iw-bloom)
+ *   and the brush kit are in the SCENE KIT comment at the end of this file: copy them into each scene.
+ * GSAP animates transforms, opacity, clip-path, filter blur, stroke-dashoffset and attr r; these classes set
+ *   initial layout, never CSS animation or transition.
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* paper (xuan) */
+  --iw-paper: #F4EAD7;          /* rice paper as it reads on screen (warm-toned #F2ECDE) */
+  --iw-paper-base: #F2ECDE;
+  --iw-paper-raw: #FCF3E1;      /* under the noise layers; with them it averages to --iw-paper */
+  --iw-paper-deep: #E4DAC7;     /* mottling, corners */
+  --iw-mount: #2F2B27;          /* dark table / silk mount outside a scroll (end cards only) */
+  --iw-silk: #D9CDB6;           /* mount border */
+
+  /* the five ink tones as they read on paper (jiao burnt, nong thick, zhong heavy, dan light, qing clear) */
+  --iw-jiao: #12100D;  --iw-nong: #322F2A;  --iw-zhong: #747067;  --iw-dan: #BDB7A9;  --iw-qing: #DFD7C6;
+  /* the same tones as [ink colour, opacity] painted over paper; overlaps darken like layered ink */
+  --iw-c-jiao: #13110F; --iw-a-jiao: .96;   --iw-c-nong: #070604; --iw-a-nong: .82;
+  --iw-c-zhong: #1F1F1C; --iw-a-zhong: .60; --iw-c-dan: #525450; --iw-a-dan: .34;
+  --iw-c-qing: #70736D; --iw-a-qing: .16;
+  --iw-ink: #13110F;            /* warm black: type, seal knock-out shadow, drops */
+  --iw-ink-cool: #858C94;       /* the cool grey that thin ink tends to */
+
+  /* the one colour: vermilion (seal; at most one tiny story mark) */
+  --iw-zhu: #B02E22;
+  --iw-zhu-on-paper: #B23C30;
+
+  /* fonts (macOS system) */
+  --iw-brush: "Xingkai SC", "Kaiti SC", "STKaiti", "Kai", "BiauKai", "Songti SC", serif;   /* calligraphy titles */
+  --iw-kai: "Kaiti SC", "STKaiti", "Kai", "BiauKai", "Songti SC", "Noto Serif CJK SC", serif; /* inscriptions, labels */
+  --iw-song: "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", serif;       /* seal glyphs, numerals */
+  --iw-latin: "Hoefler Text", "Baskerville", "Palatino", Georgia, "Kaiti SC", serif;          /* Latin, italic */
+
+  /* type scale */
+  --iw-fs-hero: calc(360 * var(--u));     /* one great character (240-420) */
+  --iw-fs-title: calc(120 * var(--u));    /* vertical title column (96-150) */
+  --iw-fs-head: calc(72 * var(--u));      /* horizontal headline, rare */
+  --iw-fs-num: calc(110 * var(--u));      /* a number written as part of an inscription */
+  --iw-fs-ins: calc(46 * var(--u));       /* inscription / colophon line */
+  --iw-fs-label: calc(38 * var(--u));     /* label beside a painted thing */
+  --iw-fs-small: calc(30 * var(--u));     /* minimum on screen */
+  --iw-fs-latin-caps: calc(50 * var(--u));
+
+  /* grid */
+  --iw-safe-x: calc(96 * var(--u));
+  --iw-safe-y: calc(54 * var(--u));
+  --iw-margin: calc(170 * var(--u));      /* inscription block inset from the frame edge */
+  --iw-col-gap: calc(28 * var(--u));      /* between vertical columns */
+  --iw-seal: calc(80 * var(--u));         /* seal edge (60-150) */
+  --iw-vig: rgba(72, 54, 30, .13);
+
+  /* captions (drawn by the runtime): an inscription, no box, vermilion mark */
+  --cap-bg: transparent;
+  --cap-fg: #12100D;
+  --cap-font: var(--iw-kai);
+  --cap-size: calc(46 * var(--u));
+  --cap-weight: 400;
+  --cap-radius: 0;
+  --cap-bottom: calc(70 * var(--u));
+  --cap-border: none;
+  --cap-shadow: none;
+  --cap-accent: #B02E22;
+  --cap-mark: dot;
+}
+@media (orientation: portrait) {
+  :root {
+    --cap-bottom: calc(210 * var(--u));
+    --cap-size: calc(48 * var(--u));
+    --iw-margin: calc(110 * var(--u));
+    --iw-safe-x: calc(60 * var(--u));
+    --iw-fs-hero: calc(420 * var(--u));
+    --iw-fs-title: calc(128 * var(--u));
+  }
+}
+
+/* stage: rice paper. Cloud mottling (+-7 %), long fibres in three directions, darker pulp specks, fine grain;
+   all procedural noise, rasterised once. Put a second .iw-paper inside #camera (sized larger than the
+   frame) when the camera pans, so the paper travels with the painting. */
+.iw-stage, .iw-paper {
+  background-color: var(--iw-paper-raw);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='1920' height='1080' viewBox='0 0 1920 1080' preserveAspectRatio='none'><filter id='c' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='0.0026' numOctaves='4' seed='7'/><feColorMatrix values='0 0 0 0 .42  0 0 0 0 .35  0 0 0 0 .24  .24 0 0 0 -.085'/></filter><filter id='g' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='0.011' numOctaves='3' seed='3'/><feColorMatrix values='0 0 0 0 .42  0 0 0 0 .35  0 0 0 0 .24  0 .35 0 0 -.14'/></filter><filter id='f' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='0.008 0.9' numOctaves='1' seed='11'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 .97  2.2 0 0 0 -1.5'/></filter><filter id='k' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='1' seed='5'/><feColorMatrix values='0 0 0 0 .3  0 0 0 0 .25  0 0 0 0 .18  0 0 .55 0 -.22'/></filter><rect width='1920' height='1080' filter='url(%23c)'/><rect width='1920' height='1080' filter='url(%23g)'/><g opacity='.22'><rect x='-400' y='-400' width='2720' height='1880' filter='url(%23f)' transform='rotate(20 960 540)'/><rect x='-400' y='-400' width='2720' height='1880' filter='url(%23f)' transform='rotate(120 960 540)' opacity='.8'/><rect x='-400' y='-400' width='2720' height='1880' filter='url(%23f)' transform='rotate(69 960 540)' opacity='.6'/></g><rect width='1920' height='1080' filter='url(%23k)' opacity='.85'/></svg>");
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+.iw-stage {
+  position: absolute; inset: 0; overflow: hidden;
+  font-family: var(--iw-kai); color: var(--iw-jiao);
+}
+#camera { position: absolute; inset: 0; }
+.iw-paper { position: absolute; }                        /* world paper: set left/top/width/height in u */
+.iw-vignette {                                           /* light old-paper vignette, ~11 % darker corners */
+  position: absolute; inset: 0; pointer-events: none; z-index: 60;
+  background: radial-gradient(ellipse 72% 78% at 50% 48%, rgba(0, 0, 0, 0) 42%, var(--iw-vig) 100%);
+ 
+}
+
+/* the ink layer: one SVG over the paper; ink is translucent dark pigment, never an opaque cover */
+.iw-ink { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.iw-ink path, .iw-ink polyline { stroke-linecap: round; stroke-linejoin: round; }
+.iw-ink path, .iw-ink polyline { stroke-linecap: round; stroke-linejoin: round; }
+
+/* inscriptions: vertical columns, read right to left */
+.iw-col {
+  position: absolute; writing-mode: vertical-rl; text-orientation: upright;
+  font-family: var(--iw-brush); font-weight: 700; font-size: var(--iw-fs-title); line-height: 1.12; letter-spacing: .06em;
+  color: var(--iw-jiao); white-space: nowrap;
+}
+.iw-col.kai { font-family: var(--iw-kai); }
+.iw-col.small { font-family: var(--iw-kai); font-weight: 400; font-size: var(--iw-fs-ins); letter-spacing: .12em; color: var(--iw-nong); }
+.iw-col .iw-ch { display: inline-block; }                 /* one span per character: written one by one */
+.iw-hero-ch {                                             /* one great character */
+  position: absolute; font-family: var(--iw-brush); font-weight: 700; font-size: var(--iw-fs-hero); line-height: 1;
+  color: var(--iw-jiao); white-space: nowrap;
+}
+.iw-ins {                                                 /* horizontal inscription line, no box */
+  position: absolute; font-family: var(--iw-kai); font-size: var(--iw-fs-ins); line-height: 1.3;
+  color: var(--iw-nong); white-space: nowrap; letter-spacing: .08em;
+}
+.iw-ins.latin { font-family: var(--iw-latin); font-style: italic; letter-spacing: .02em; }
+.iw-ins .iw-mark {                                        /* tiny vermilion square ahead of a line (0.32 x size) */
+  display: inline-block; width: .32em; height: .32em; margin-right: .5em; vertical-align: .28em;
+  background: var(--iw-zhu); opacity: .92;
+}
+
+/* seal (yin): vermilion, slightly irregular square, characters knocked out in paper (baiwen).
+   One character: <div class="iw-seal"><span>茶</span></div>; four: add class q and four spans (read
+   right column top-down, then left). Size with --s. Ink-paste unevenness is the ::after speckle layer. */
+.iw-seal {
+  --s: var(--iw-seal);
+  position: absolute; width: var(--s); height: var(--s); box-sizing: border-box;
+  display: grid; place-items: center; background: var(--iw-zhu);
+  clip-path: polygon(1.5% 2.5%, 34% 0.5%, 68% 2%, 98.5% 0.8%, 99.5% 35%, 98% 70%, 99.2% 98.5%, 64% 99.5%, 30% 98%, 0.8% 99.2%, 2% 64%, 0.5% 30%);
+  color: var(--iw-paper); font-family: var(--iw-song); font-weight: 900; font-size: calc(var(--s) * .66); line-height: 1;
+  overflow: hidden;
+}
+.iw-seal.kai { font-family: var(--iw-kai); font-weight: 700; }
+.iw-seal.q { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; grid-auto-flow: column; direction: rtl;
+  font-size: calc(var(--s) * .38); padding: calc(var(--s) * .06); }
+.iw-seal span { display: block; transform: translateY(-2%); }
+.iw-seal::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 27%, var(--iw-paper) 0 1.2%, transparent 1.8%),
+    radial-gradient(circle at 73% 14%, var(--iw-paper) 0 0.9%, transparent 1.5%),
+    radial-gradient(circle at 86% 62%, var(--iw-paper) 0 1.5%, transparent 2.1%),
+    radial-gradient(circle at 39% 81%, var(--iw-paper) 0 0.8%, transparent 1.4%),
+    radial-gradient(circle at 9% 71%, var(--iw-paper) 0 1.0%, transparent 1.6%),
+    radial-gradient(circle at 61% 91%, var(--iw-paper) 0 1.3%, transparent 1.9%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='0.09' numOctaves='2' seed='9'/><feColorMatrix values='0 0 0 0 .96  0 0 0 0 .92  0 0 0 0 .84  2.4 0 0 0 -1.45'/></filter><rect width='200' height='200' filter='url(%23p)'/></svg>");
+  background-size: 100% 100%;
+}
+.iw-mount { position: absolute; box-shadow: 0 0 0 calc(40 * var(--u)) var(--iw-silk), 0 calc(18 * var(--u)) calc(60 * var(--u)) calc(30 * var(--u)) rgba(0, 0, 0, .45); }
+
+/* ==== SCENE KIT (not CSS; copy into each scene, see ink-wash.md "Technique library") ====
+ * Part 1, between the DEFS markers: the ink filters, paste as the first child of <svg class="iw-ink">.
+ * Part 2, between the KIT markers: the brush kit, paste at the top of the scene script.
+ * Deterministic: seeded by MV.rand only. Sizes are in u (the svg viewBox is the frame in u).
+
+--- DEFS BEGIN ---
+<defs>
+  <!-- wet ink: bleed into the paper (noisy displacement + blur), pigment piles up at the edge, granulation -->
+  <filter id="iw-wet" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.013" numOctaves="2" seed="4" result="n"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="10" xChannelSelector="R" yChannelSelector="G" result="d"/>
+    <feGaussianBlur in="d" stdDeviation="1.6" result="a"/>
+    <feGaussianBlur in="d" stdDeviation="7" result="b"/>
+    <feComposite in="a" in2="b" operator="arithmetic" k2="1.6" k3="-0.6" result="e"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.35" numOctaves="1" seed="6" result="g"/>
+    <feColorMatrix in="g" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0.6 0 0 0 0.62" result="ga"/>
+    <feComposite in="e" in2="ga" operator="in"/>
+  </filter>
+  <!-- dry ink: fibre jitter + paper tooth (small holes where the bristles skip) -->
+  <filter id="iw-dry" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.6" numOctaves="1" seed="8" result="j"/>
+    <feDisplacementMap in="SourceGraphic" in2="j" scale="2.6" xChannelSelector="R" yChannelSelector="G" result="d"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.22" numOctaves="2" seed="2" result="t"/>
+    <feColorMatrix in="t" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  -3.2 0 0 0 3.25" result="ta"/>
+    <feComposite in="d" in2="ta" operator="in"/>
+  </filter>
+  <!-- type written in ink: ragged edge + a little bleed under it -->
+  <filter id="iw-edge" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="2" seed="12" result="n"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="4" xChannelSelector="R" yChannelSelector="G" result="d"/>
+    <feGaussianBlur in="d" stdDeviation="2.2" result="b"/>
+    <feComponentTransfer in="b" result="h"><feFuncA type="linear" slope=".45"/></feComponentTransfer>
+    <feMerge><feMergeNode in="h"/><feMergeNode in="d"/></feMerge>
+  </filter>
+  <!-- ink bloom front: displaces a growing circle into a ragged, spreading drop -->
+  <filter id="iw-bloom" x="-30%" y="-30%" width="160%" height="160%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.004" numOctaves="3" seed="21" result="n"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="190" xChannelSelector="R" yChannelSelector="G"/>
+    <feGaussianBlur stdDeviation="10"/>
+  </filter>
+</defs>
+--- DEFS END ---
+
+--- KIT BEGIN ---
+const IW = (() => {
+  const NS = "http://www.w3.org/2000/svg", cl = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x)), lp = (a, b, t) => a + (b - a) * t;
+  const INK = { jiao: ["#13110F", .96], nong: ["#070604", .82], zhong: ["#1F1F1C", .6], dan: ["#525450", .34], qing: ["#70736D", .16] };
+  const PROF = { brush: s => Math.min(1, .45 + s * 5.5) * Math.pow(1 - s * .9, .45), even: s => Math.min(1, .55 + s * 9) * Math.min(1, .5 + (1 - s) * 8),
+    tip: s => Math.pow(Math.sin(Math.PI * cl(s * .96 + .02)), .6), lens: s => Math.pow(Math.sin(Math.PI * s), .75), nail: s => Math.pow(1 - s, .7) * Math.min(1, .7 + s * 6) };
+  let D, WET, DRY, n = 0;
+  const el = (t, a, p) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); p && p.appendChild(e); return e; };
+  const pd = P => P.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join("");
+  const noise = seed => { const r = MV.rand(seed), v = Array.from({ length: 256 }, r); return x => { const i = Math.floor(x), f = x - i; return lp(v[i & 255], v[(i + 1) & 255], f * f * (3 - 2 * f)); }; };
+  function centre(P, ds) {                       // Catmull-Rom through [x,y,pressure], resampled every ds
+    const Q = [];
+    for (let i = 0; i < P.length - 1; i++) { const a = P[Math.max(0, i - 1)], b = P[i], c = P[i + 1], d = P[Math.min(P.length - 1, i + 2)];
+      for (let k = 0; k < 10; k++) { const t = k / 10, f = j => .5 * (2 * b[j] + (c[j] - a[j]) * t + (2 * a[j] - 5 * b[j] + 4 * c[j] - d[j]) * t * t + (3 * b[j] - a[j] - 3 * c[j] + d[j]) * t * t * t);
+        Q.push([f(0), f(1), lp(b[2] ?? 1, c[2] ?? 1, t)]); } }
+    const z = P[P.length - 1]; Q.push([z[0], z[1], z[2] ?? 1]);
+    const acc = [0]; for (let i = 1; i < Q.length; i++) acc.push(acc[i - 1] + Math.hypot(Q[i][0] - Q[i - 1][0], Q[i][1] - Q[i - 1][1]));
+    const L = acc[acc.length - 1] || 1, m = cl(Math.ceil(L / ds) + 1, 3, 400), out = [];
+    for (let i = 0, j = 0; i < m; i++) { const s = L * i / (m - 1); while (j < Q.length - 2 && acc[j + 1] < s) j++;
+      const t = cl((s - acc[j]) / ((acc[j + 1] - acc[j]) || 1)); out.push([0, 1, 2].map(k => lp(Q[j][k], Q[j + 1][k], t))); }
+    return { P: out, L };
+  }
+  // o: w, tone (bristles), body (body tone), dry 0..1, prof, side +-1 (loaded: dark edge), nb, rough, seed, wetG/dryG (layers)
+  function stroke(pts, o = {}) {
+    const id = "iw" + n++, w = o.w ?? 10, dry = o.dry ?? .25, seed = o.seed ?? id, R = MV.rand(seed), nz = noise(seed + "w");
+    const { P, L } = centre(pts, Math.max(1.5, w * .2)), m = P.length, prof = PROF[o.prof || "brush"], ws = [], nx = [], ny = [];
+    for (let i = 0; i < m; i++) { const s = i / (m - 1), a = P[Math.max(0, i - 1)], b = P[Math.min(m - 1, i + 1)], l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      ws.push(Math.max(w * .04, w * prof(s) * P[i][2] * (1 + (o.rough ?? .12) * (2 * nz(s * L / (w * 1.3 + 1)) - 1)))); nx.push((a[1] - b[1]) / l); ny.push((b[0] - a[0]) / l); }
+    const ext = (i, j, k) => [P[i][0] + (P[i][0] - P[j][0]) / (L / (m - 1)) * k, P[i][1] + (P[i][1] - P[j][1]) / (L / (m - 1)) * k];
+    const mk = el("mask", { id, maskUnits: "userSpaceOnUse", x: -3000, y: -3000, width: 9000, height: 9000 }, D);
+    const rv = el("path", { d: pd([ext(0, 1, w * .6), ...P, ext(m - 1, m - 2, w * .6)]), fill: "none", stroke: "#fff", "stroke-width": w * 1.6 + 8,
+      "stroke-linecap": "butt", "stroke-linejoin": "round", pathLength: 1, "stroke-dasharray": "1 1.01", "stroke-dashoffset": 1 }, mk);
+    const bodyA = Math.pow(1 - dry, 1.6) * (o.bodyK ?? 1), [bc, ba] = INK[o.body || o.tone || "nong"];
+    if (bodyA > .01) {                            // body: one polygon, ink load fading along the stroke
+      const g = el("linearGradient", { id: id + "g", gradientUnits: "userSpaceOnUse", x1: P[0][0], y1: P[0][1], x2: P[m - 1][0], y2: P[m - 1][1] }, D);
+      el("stop", { offset: 0, "stop-color": bc, "stop-opacity": ba * bodyA }, g); el("stop", { offset: 1, "stop-color": bc, "stop-opacity": ba * bodyA * (1 - dry * .55) }, g);
+      const side = k => P.map((p, i) => [p[0] + k * nx[i] * ws[i] / 2, p[1] + k * ny[i] * ws[i] / 2]);
+      el("path", { d: pd([...side(1), ...side(-1).reverse()]) + "Z", fill: `url(#${id}g)`, mask: `url(#${id})` }, o.wetG || WET);
+    }
+    const nb = o.nb ?? Math.round(cl(w * .5, 4, 40)), gb = el("g", { mask: `url(#${id})` }, o.dryG || DRY), brk = noise(seed + "k"), sc = w * 4 + 60;
+    const [tc, ta] = INK[o.tone || "nong"];
+    for (let j = 0; j < nb; j++) {               // bristles: ink runs out towards the end; gaps are streaks shared by neighbours
+      const off = (j + .5) / nb - .5 + (R() - .5) * .6 / nb, edge = Math.abs(off) * 2, end = 1 - R() * dry * .35, bn = noise(seed + j);
+      let a = (.55 + R() * .45) * ta; if (o.side) a *= cl(.25 + 1.1 * (off * o.side + .5));
+      const dash = []; let run = 0, on = true;
+      for (let i = 1; i < m; i++) { const s = i / (m - 1), ink = s <= end && brk(s * L / sc + off * 1.6) * .7 + bn(s * L / 40) * .3 > dry * (.3 + .7 * s) * (.6 + .8 * edge);
+        if (ink !== on) { dash.push(run); run = 0; on = ink; } run++; }
+      dash.push(run); if (dash.length % 2) dash.push(0);
+      const pl = el("polyline", { points: P.map((p, i) => (p[0] + nx[i] * ws[i] * off).toFixed(1) + "," + (p[1] + ny[i] * ws[i] * off).toFixed(1)).join(" "),
+        fill: "none", stroke: tc, "stroke-opacity": a.toFixed(3), "stroke-width": (w / nb * (1 + R() * 1.1)).toFixed(2), pathLength: m - 1 }, gb);
+      if (dash.length > 2 || dash[1] > 0) pl.setAttribute("stroke-dasharray", dash.join(" "));
+    }
+    return rv;                                    // paint it: tween its stroke-dashoffset 1 -> 0
+  }
+  const paint = (tl, rv, t0, dur = .4, ease = "power2.out") => tl.fromTo(rv, { attr: { "stroke-dashoffset": 1 } }, { attr: { "stroke-dashoffset": 0 }, duration: Math.max(.25, dur), ease }, t0);
+  function mass(pts, o = {}) {                    // soft mass: tone at the top dissolving into mist below; ends fade sideways
+    const id = "iw" + n++, ys = pts.map(p => p[1]), xs = pts.map(p => p[0]), y0 = Math.min(...ys), y1 = Math.max(...ys), x0 = Math.min(...xs), x1 = Math.max(...xs);
+    const [c, a] = INK[o.tone || "dan"], top = a * (o.top ?? 1), f = o.fadeX ?? .18, g = el("linearGradient", { id, gradientUnits: "userSpaceOnUse", x1: 0, y1: y0, x2: 0, y2: y1 }, D);
+    [[0, top], [o.mist ?? .55, top * .55], [1, 0]].forEach(([q, v]) => el("stop", { offset: q, "stop-color": c, "stop-opacity": v }, g));
+    const h = el("linearGradient", { id: id + "h", gradientUnits: "userSpaceOnUse", x1: x0, y1: 0, x2: x1, y2: 0 }, D);
+    [[0, 0], [f, 1], [1 - f, 1], [1, 0]].forEach(([q, v]) => el("stop", { offset: q, "stop-color": "#fff", "stop-opacity": v }, h));
+    el("rect", { x: x0, y: y0, width: x1 - x0, height: y1 - y0, fill: `url(#${id}h)` }, el("mask", { id: id + "m", maskUnits: "userSpaceOnUse", x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, D));
+    return el("path", { d: pd(pts) + "Z", fill: `url(#${id})`, mask: f > 0 ? `url(#${id}m)` : "" }, o.parent || WET);
+  }
+  function ridge(x0, x1, base, peaks, seed, step = 12) {   // peaks [[x, height, halfWidth]]: pointed, 3-octave roughness
+    const a = noise(seed + "a"), b = noise(seed + "b"), c = noise(seed + "c"), out = [];
+    for (let x = x0; x <= x1; x += step) { let h = 0; for (const [px, ph, pw] of peaks) h = Math.max(h, ph * Math.exp(-Math.abs(x - px) / pw));
+      const r = (a(x / 180) - .5) * .5 + (b(x / 60) - .5) * .3 + (c(x / 20) - .5) * .15; out.push([x, base - h * (1 + .35 * r) - 6 * r]); }
+    return out;
+  }
+  function blot(x, y, r, o = {}) {                // irregular ink dot: moss, drop, splatter
+    const R = MV.rand(o.seed ?? "b" + n++), [c, a] = INK[o.tone || "jiao"], P = [];
+    for (let i = 0; i < 12; i++) { const t = i / 12 * Math.PI * 2, q = r * (.75 + R() * .5); P.push([x + Math.cos(t) * q * (o.sx ?? 1), y + Math.sin(t) * q]); }
+    return el("path", { d: pd(P) + "Z", fill: c, "fill-opacity": a * (o.a ?? 1) }, o.parent || WET);
+  }
+  function ring(x, y, r, o = {}) {                // open ring on water: 1.86 pi, flattened by perspective
+    const t0 = o.rot ?? 0, t1 = t0 + Math.PI * 1.86, [c, a] = INK[o.tone || "zhong"], p = t => (x + r * Math.cos(t)).toFixed(1) + " " + (y + r * .32 * Math.sin(t)).toFixed(1);
+    return el("path", { d: `M${p(t0)}A${r} ${r * .32} 0 1 1 ${p(t1)}`, fill: "none", stroke: c, "stroke-opacity": a, "stroke-width": o.w ?? 3 }, o.parent || DRY);
+  }
+  function bloom(id, cx, cy) {                    // mask whose ragged circle grows: tween attr r 0 -> R
+    return el("circle", { cx, cy, r: 0, fill: "#fff", filter: "url(#iw-bloom)" }, el("mask", { id, maskUnits: "userSpaceOnUse", x: -4000, y: -4000, width: 10000, height: 10000 }, D));
+  }
+  const init = (svg, w = ".iw-wet", d = ".iw-dry") => { D = svg.querySelector("defs"); WET = svg.querySelector(w); DRY = svg.querySelector(d); };
+  return { init, stroke, paint, mass, ridge, blot, ring, bloom, el, INK };
+})();
+--- KIT END ---
+*/

@@ -1,0 +1,176 @@
+/* exec-brief.css — Executive Brief style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ * System fonts only; no imports, no url(), no web fonts. GSAP animates transforms/opacity only;
+ * these classes set initial layout, never CSS animation or transition.
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* palette */
+  --eb-paper: #F7F3EA;
+  --eb-paper2: #EEE8DA;
+  --eb-card: #FBF9F4;
+  --eb-ink: #16181E;
+  --eb-ink2: #3A3E47;
+  --eb-graphite: #5C616B;
+  --eb-mute: #8E939C;
+  --eb-rule: #CDC6B6;
+  --eb-rule2: #E2DCCD;
+  --eb-shadow: rgba(30, 26, 18, .16);
+  --eb-accent: #C8371E;          /* one per film: vermilion; alt #1F3DFF cobalt, #1E6B4B forest, #B8892B gold */
+
+  /* fonts */
+  --eb-serif: Georgia, "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "Times New Roman", serif;
+  --eb-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+
+  /* type scale */
+  --eb-fs-statement: calc(88 * var(--u));   /* 72-96 */
+  --eb-fs-chapter-no: calc(240 * var(--u));
+  --eb-fs-chapter: calc(72 * var(--u));
+  --eb-fs-title: calc(56 * var(--u));       /* column titles; 34-56 */
+  --eb-fs-quote: calc(56 * var(--u));
+  --eb-fs-body: calc(32 * var(--u));        /* 28-34 */
+  --eb-fs-label: calc(20 * var(--u));       /* 16-20 */
+  --eb-fs-stat: calc(200 * var(--u));       /* 160-220 */
+
+  /* grid */
+  --eb-margin: calc(120 * var(--u));
+  --eb-gutter: calc(32 * var(--u));
+  --eb-top: calc(110 * var(--u));
+  --eb-col: calc((100vw - 2 * var(--eb-margin) - 11 * var(--eb-gutter)) / 12);
+
+  /* captions (drawn by the runtime) */
+  --cap-bg: rgba(22, 24, 30, .9);
+  --cap-fg: #F7F3EA;
+  --cap-font: var(--eb-sans);
+  --cap-size: calc(40 * var(--u));
+  --cap-radius: calc(8 * var(--u));
+  --cap-bottom: calc(72 * var(--u));
+  --cap-weight: 500;
+  --cap-accent: var(--eb-accent); --cap-mark: tick;
+  --cap-shadow: 0 calc(10 * var(--u)) calc(30 * var(--u)) rgba(30, 26, 18, .25);
+}
+@media (orientation: portrait) {
+  :root {
+    --cap-bottom: calc(220 * var(--u));
+    --eb-margin: calc(72 * var(--u));
+    --eb-fs-statement: calc(64 * var(--u));
+  }
+}
+
+/* stage: paper + warm top light + 8% vignette. Put scene content in #camera inside it. */
+.eb-stage {
+  position: absolute; inset: 0; overflow: hidden;
+  background: linear-gradient(180deg, var(--eb-paper) 0%, var(--eb-paper) 55%, var(--eb-paper2) 100%);
+  font-family: var(--eb-sans); color: var(--eb-ink);
+}
+.eb-stage::before {               /* warm light from above */
+  content: ""; position: absolute; left: 15%; top: -55%; width: 70%; height: 100%; border-radius: 50%;
+  background: radial-gradient(circle closest-side, rgba(255, 255, 255, .6), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+.eb-stage::after {                /* vignette, above content */
+  content: ""; position: absolute; inset: 0; z-index: 50; pointer-events: none;
+  background: radial-gradient(circle calc(1188 * var(--u)) at 50% 50%, rgba(30, 26, 18, 0) 55%, rgba(30, 26, 18, .08) 100%);
+}
+.eb-page { position: absolute; inset: 0; background: inherit; }
+.eb-dim { position: absolute; inset: 0; background: rgba(30, 26, 18, .18); opacity: 0; pointer-events: none; }
+.eb-margins::before, .eb-margins::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 1px; background: var(--eb-rule2);
+}
+.eb-margins::before { left: calc(var(--eb-margin) - 40 * var(--u)); }
+.eb-margins::after { right: calc(var(--eb-margin) - 40 * var(--u)); }
+
+/* labels */
+.eb-label {
+  font-family: var(--eb-sans); font-size: var(--eb-fs-label); font-weight: 600;
+  letter-spacing: .18em; text-transform: uppercase; font-variant-numeric: tabular-nums;
+  color: var(--eb-graphite); white-space: nowrap;
+}
+.eb-folio {
+  position: absolute; top: calc(64 * var(--u)); right: var(--eb-margin);
+  font: 600 calc(18 * var(--u)) var(--eb-sans); letter-spacing: .2em; color: var(--eb-mute);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.eb-kicker { display: flex; align-items: center; gap: calc(14 * var(--u)); white-space: nowrap; }
+.eb-kicker::before {
+  content: ""; width: calc(11 * var(--u)); height: calc(11 * var(--u));
+  background: var(--eb-accent); border-radius: calc(2 * var(--u));
+}
+.eb-serial { color: var(--eb-accent); font-weight: 700; letter-spacing: .12em; }
+
+/* statements */
+.eb-statement { font-family: var(--eb-serif); font-size: var(--eb-fs-statement); font-weight: 600; line-height: 1.32; letter-spacing: .01em; color: var(--eb-ink); }
+.eb-line { display: block; white-space: nowrap; }
+.eb-em { position: relative; display: inline-block; color: var(--eb-accent); }
+.eb-underline {
+  position: absolute; left: 0; bottom: -.04em; width: 100%; height: max(3px, .055em);
+  background: var(--eb-accent); opacity: .85; border-radius: 1px; transform-origin: 0 50%; transform: scaleX(0);
+}
+.eb-body { font-family: var(--eb-sans); font-size: var(--eb-fs-body); line-height: 1.6; color: var(--eb-ink2); }
+
+/* chapter card */
+.eb-chapter-no { font-family: var(--eb-serif); font-size: var(--eb-fs-chapter-no); font-weight: 700; line-height: 1; letter-spacing: -.04em; color: var(--eb-accent); }
+.eb-chapter-rule { height: calc(2 * var(--u)); width: calc(520 * var(--u)); background: var(--eb-ink); transform-origin: 0 50%; }
+.eb-chapter-title { font-family: var(--eb-serif); font-size: var(--eb-fs-chapter); font-weight: 600; line-height: 1.2; white-space: nowrap; }
+.eb-chapter-sub { font-family: var(--eb-sans); font-size: calc(30 * var(--u)); line-height: 1.5; color: var(--eb-graphite); max-width: calc(760 * var(--u)); }
+
+/* rules */
+.eb-rule { height: 1px; background: var(--eb-rule); transform-origin: 0 50%; }
+.eb-rule-v { width: calc(1.5 * var(--u)); background: var(--eb-rule); transform-origin: 50% 0; }
+
+/* card */
+.eb-card {
+  position: absolute; box-sizing: border-box; padding: calc(36 * var(--u));
+  background: var(--eb-card); border: 1px solid var(--eb-rule); border-radius: calc(12 * var(--u));
+  box-shadow: 0 calc(14 * var(--u)) calc(40 * var(--u)) var(--eb-shadow); overflow: hidden;
+}
+.eb-card.accent-edge::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: calc(6 * var(--u)); background: var(--eb-accent); }
+
+/* big number */
+.eb-stat { display: flex; align-items: baseline; white-space: nowrap; }
+.eb-stat-num { font: 600 var(--eb-fs-stat)/1 var(--eb-sans); letter-spacing: -.03em; font-variant-numeric: tabular-nums; color: var(--eb-ink); }
+.eb-stat-unit { font: 500 calc(.28 * var(--eb-fs-stat)) var(--eb-sans); color: var(--eb-graphite); margin-left: calc(.08 * var(--eb-fs-stat)); }
+.eb-stat-label { margin-top: calc(.12 * var(--eb-fs-stat)); font: calc(30 * var(--u))/1.4 var(--eb-sans); color: var(--eb-graphite); }
+
+/* flow */
+.eb-flow { position: absolute; display: flex; align-items: center; }
+.eb-node {
+  box-sizing: border-box; height: calc(150 * var(--u)); padding: calc(20 * var(--u)) calc(22 * var(--u)); flex: 1 1 0;
+  background: var(--eb-card); border: 1.5px solid var(--eb-rule); border-radius: calc(10 * var(--u));
+  box-shadow: 0 calc(10 * var(--u)) calc(30 * var(--u)) var(--eb-shadow);
+}
+.eb-node.accent { border-color: var(--eb-accent); }
+.eb-node .eb-label { font-size: calc(16 * var(--u)); font-weight: 700; letter-spacing: .16em; color: var(--eb-mute); }
+.eb-node.accent .eb-label { color: var(--eb-accent); }
+.eb-node-title { margin-top: calc(10 * var(--u)); font: 600 calc(32 * var(--u))/1.2 var(--eb-serif); white-space: nowrap; }
+.eb-node-sub { margin-top: calc(8 * var(--u)); font: calc(22 * var(--u))/1.4 var(--eb-sans); color: var(--eb-graphite); }
+.eb-link { position: relative; flex: 0 0 calc(48 * var(--u)); height: calc(1.5 * var(--u)); background: var(--eb-graphite); transform-origin: 0 50%; }
+.eb-link::after { content: ""; position: absolute; right: calc(-5 * var(--u)); top: calc(-4.25 * var(--u)); width: calc(10 * var(--u)); height: calc(10 * var(--u)); border-radius: 50%; background: var(--eb-graphite); }
+
+/* timeline */
+.eb-timeline { position: absolute; height: 0; }
+.eb-timeline-base { position: absolute; left: 0; right: 0; top: calc(-1 * var(--u)); height: calc(2 * var(--u)); background: var(--eb-rule); transform-origin: 0 50%; }
+.eb-timeline-fill { position: absolute; left: 0; width: 100%; top: calc(-2 * var(--u)); height: calc(4 * var(--u)); border-radius: calc(2 * var(--u)); background: var(--eb-accent); transform-origin: 0 50%; transform: scaleX(0); }
+.eb-tick { position: absolute; top: calc(-9 * var(--u)); width: calc(18 * var(--u)); height: calc(18 * var(--u)); margin-left: calc(-9 * var(--u)); box-sizing: border-box; border-radius: 50%; border: 2px solid var(--eb-rule); background: var(--eb-paper); }
+.eb-tick.on { border-color: var(--eb-accent); background: var(--eb-accent); }
+.eb-step { position: absolute; top: calc(28 * var(--u)); width: calc(320 * var(--u)); }
+.eb-step .eb-label { font-size: calc(18 * var(--u)); font-weight: 700; letter-spacing: .14em; color: var(--eb-mute); }
+.eb-step-text { margin-top: calc(8 * var(--u)); font: calc(24 * var(--u))/1.4 var(--eb-sans); color: var(--eb-ink2); }
+
+/* compare, list, quote, figure */
+.eb-compare-title { font: 600 var(--eb-fs-title)/1.2 var(--eb-serif); }
+.eb-compare-title.accent { color: var(--eb-accent); }
+.eb-item { display: flex; align-items: flex-start; gap: .6em; margin-bottom: .55em; font: var(--eb-fs-body)/1.45 var(--eb-sans); color: var(--eb-ink2); }
+.eb-item::before { content: ""; flex: none; width: .32em; height: .32em; margin-top: .5em; border-radius: .06em; background: var(--eb-graphite); }
+.eb-item.accent::before { background: var(--eb-accent); }
+.eb-quote { position: relative; font: 600 var(--eb-fs-quote)/1.45 var(--eb-serif); color: var(--eb-ink); }
+.eb-quote::before { content: "\201C"; position: absolute; left: -.35em; top: -1.1em; font-size: 3.2em; line-height: 1; font-weight: 700; color: var(--eb-accent); opacity: .18; }
+.eb-figure { overflow: hidden; border: 1px solid var(--eb-rule); border-radius: calc(10 * var(--u)); background: var(--eb-card); box-shadow: 0 calc(16 * var(--u)) calc(44 * var(--u)) var(--eb-shadow); }
+.eb-figure img { display: block; width: 100%; height: 100%; object-fit: cover; filter: saturate(.85); }
+.eb-figure-cap { margin-top: calc(14 * var(--u)); font: 600 calc(16 * var(--u)) var(--eb-sans); letter-spacing: .14em; color: var(--eb-mute); }

@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swarmai.dev/schemas/s_motion-video/storyboard.schema.json",
+  "title": "storyboard.json",
+  "description": "Source of truth for one film. Field meanings and fixed numbers: references/project-contract.md. Keys starting with 'x-' are free notes and ignored by tools.",
+  "type": "object",
+  "required": ["title", "lang", "width", "height", "fps", "style", "method", "mode", "voice", "bgm", "captions", "scenes"],
+  "additionalProperties": false,
+  "patternProperties": {
+    "^x-": {}
+  },
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "Film title."
+    },
+    "lang": {
+      "type": "string",
+      "pattern": "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
+      "description": "BCP 47 language tag of the narration, e.g. zh-CN, en-US."
+    },
+    "width": {
+      "type": "integer",
+      "minimum": 16,
+      "multipleOf": 2,
+      "description": "Frame width in px, e.g. 1920 (16:9) or 1080 (9:16)."
+    },
+    "height": {
+      "type": "integer",
+      "minimum": 16,
+      "multipleOf": 2,
+      "description": "Frame height in px, e.g. 1080 (16:9) or 1920 (9:16)."
+    },
+    "fps": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60,
+      "description": "Frames per second, normally 30; 60 for films with many fast moves."
+    },
+    "style": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Main style id from the skill's style list, e.g. exec-brief."
+    },
+    "method": {
+      "type": "string",
+      "enum": ["science", "principle", "tutorial", "listicle", "story", "data", "meeting-share", "product", "launch", "feature", "brand", "promo", "game-drama"],
+      "description": "Writing method id (references/writing-methods.md)."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["explainer", "product-intro", "footage-edit", "feed-ad", "marketing", "game-promo", "game-drama", "warmup", "meeting-share"],
+      "description": "Production mode id (references/production-modes.md). Default explainer."
+    },
+    "voice": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "TTS voice name, e.g. zh-CN-YunxiNeural."
+        },
+        "rate": {
+          "type": "string",
+          "pattern": "^[+-][0-9]{1,3}%$",
+          "default": "+0%",
+          "description": "Speaking rate offset, e.g. +0%, +10%."
+        }
+      }
+    },
+    "bgm": {
+      "description": "Background music settings, or null for no music.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["mood"],
+          "additionalProperties": false,
+          "properties": {
+            "mood": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Music mood for scripts/bgm.py, e.g. calm, tense, hopeful, bright, tech, warm, cinematic."
+            },
+            "volume": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.32,
+              "description": "Multiplier after pre-levelling (contract default 0.32)."
+            },
+            "seed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Seed for a reproducible track."
+            }
+          }
+        }
+      ]
+    },
+    "captions": {
+      "type": "boolean",
+      "description": "Burn captions from the TTS caption lines."
+    },
+    "target_seconds": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Planned film length. tts.py and check.py warn at +10 % and fail at +20 % over it."
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/scene" },
+      "description": "Scenes in play order: S01, S02, ... (at most 8 sfx in the whole film, checked by tools)."
+    }
+  },
+  "$defs": {
+    "scene": {
+      "type": "object",
+      "required": ["id", "title", "narration", "visual", "shot_type", "duration", "transition"],
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x-": {}
+      },
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^S[0-9]{2}$",
+          "description": "S01, S02, ... in play order; file names follow the id."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Short label: at most 10 Chinese chars or 5 English words (hard cap 40 chars)."
+        },
+        "narration": {
+          "type": "string",
+          "description": "Exactly what the voice says; empty string for a scene without voice. No pause tags or stage directions."
+        },
+        "visual": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What is on screen and when; cue points as 'element <- spoken keyword'."
+        },
+        "shot_type": {
+          "type": "string",
+          "enum": [
+            "question-card", "big-number", "term-card", "analogy-map", "flowchart", "structure-reveal",
+            "cause-chain", "timeline", "compare-columns", "data-chart", "formula-breakdown", "zoom-detail",
+            "myth-fix", "numbered-list", "breather-card", "summary-card",
+            "hero-reveal", "detail-push", "callout", "number-flip", "feature-grid", "before-after",
+            "ui-walkthrough", "cursor-action", "input-generate", "anchored-rotation", "crash-in",
+            "social-proof", "price-reveal", "logo-endcard",
+            "title-card", "chapter-card", "statement", "dialog-card", "dot-count", "meter",
+            "footage-clip", "ambient-plate"
+          ],
+          "description": "One id from references/shot-types.md."
+        },
+        "duration": {
+          "type": ["number", "null"],
+          "minimum": 2.0,
+          "description": "Seconds. Written by tts.py (measured voice + 0.4, at least 2.0); null until then. Scenes without narration set it by hand."
+        },
+        "sfx": {
+          "type": "array",
+          "maxItems": 2,
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": ["name", "at"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "enum": ["whoosh", "pop", "click", "ding", "thud", "rise"]
+              },
+              "at": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Seconds from the scene start."
+              }
+            }
+          },
+          "description": "At most 2 per scene, 8 per film."
+        },
+        "transition": {
+          "type": "string",
+          "enum": ["cut", "fade"],
+          "default": "cut",
+          "description": "Join into the NEXT scene. fade = 0.4 s crossfade, total length unchanged."
+        },
+        "hero": {
+          "type": "boolean",
+          "default": false,
+          "description": "The signature scene; bgm.py snaps the music's lift to its start (at most one per film)."
+        }
+      }
+    }
+  }
+}

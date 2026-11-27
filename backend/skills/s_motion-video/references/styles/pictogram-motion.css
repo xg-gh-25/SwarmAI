@@ -1,0 +1,126 @@
+/* pictogram-motion.css — Pictogram Motion style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ * System fonts only; no imports, no remote or bitmap URLs, no web fonts. GSAP animates transforms/opacity only;
+ * these classes set initial layout, never CSS animation or transition.
+ * The grid pattern, sun disc and pictogram figures are inline SVG built by the kit in
+ * pictogram-motion.md ("Technique library"); a card reads its hue from --c0..--c4 / --fg,
+ * which the kit sets on each .pm-card (PM.hue(el, "cobalt")).
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* neutrals */
+  --pm-cream: #F9F4E8;
+  --pm-ink: #17141F;
+
+  /* five hues x five tones: 0 darkest .. 2 base .. 4 lightest; fg = type and figure colour */
+  --pm-ember-0: #B14029;   --pm-ember-1: #CA472A;   --pm-ember-2: #E34F2B;   --pm-ember-3: #E76643;   --pm-ember-4: #EB805E;   --pm-ember-fg: #F9F4E8;
+  --pm-cobalt-0: #293B92;  --pm-cobalt-1: #2D42A3;  --pm-cobalt-2: #3049B5;  --pm-cobalt-3: #4D61BA;  --pm-cobalt-4: #6E7CBF;  --pm-cobalt-fg: #F9F4E8;
+  --pm-jade-0: #11765F;    --pm-jade-1: #108668;    --pm-jade-2: #109672;    --pm-jade-3: #31A380;    --pm-jade-4: #58B290;    --pm-jade-fg: #F9F4E8;
+  --pm-saffron-0: #B98A24; --pm-saffron-1: #D39D24; --pm-saffron-2: #EDB024; --pm-saffron-3: #F0B93D; --pm-saffron-4: #F2C459; --pm-saffron-fg: #241A06;
+  --pm-clay-0: #9B6D4D;    --pm-clay-1: #B17B53;    --pm-clay-2: #C68A5A;    --pm-clay-3: #CE996B;    --pm-clay-4: #D7AA7F;    --pm-clay-fg: #21150B;
+  /* dark neutral: cream type, accent = saffron */
+  --pm-slate-0: #10121B;   --pm-slate-1: #161925;   --pm-slate-2: #1D2131;   --pm-slate-3: #2A2F40;   --pm-slate-4: #3A3F52;   --pm-slate-fg: #F9F4E8;
+
+  /* fonts */
+  --pm-sans: -apple-system, "SF Pro Display", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+  --pm-heavy-cjk: "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;   /* zh: heaviest system weight is 600 */
+  --pm-heavy-ja: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "PingFang SC", sans-serif;  /* ja: W8-W9 at 800-900 */
+  --pm-mono: "SF Mono", Menlo, "PingFang SC", monospace;
+
+  /* grid: one square cell = 1/6 of the 1080 frame height */
+  --pm-cell: calc(180 * var(--u));
+  --pm-margin: calc(130 * var(--u));     /* text column left edge on cards */
+  --pm-hud-x: calc(100 * var(--u));
+  --pm-hud-y: calc(58 * var(--u));
+
+  /* type scale */
+  --pm-fs-mega: calc(330 * var(--u));    /* layout B ghost title, chapter numeral */
+  --pm-fs-index: calc(300 * var(--u));   /* outline item number */
+  --pm-fs-count: calc(480 * var(--u));   /* count-up slam */
+  --pm-fs-title: calc(170 * var(--u));   /* 150-190; fitted to the column */
+  --pm-fs-second: calc(92 * var(--u));   /* second-language line */
+  --pm-fs-sub: calc(44 * var(--u));      /* layout B small title */
+  --pm-fs-meta: calc(22 * var(--u));
+  --pm-fs-tag: calc(20 * var(--u));
+  --pm-fs-hud: calc(17 * var(--u));
+
+  /* captions: a mono line on a solid band (scenes may set --cap-bg to the card hue's tone 0) */
+  --cap-bg: rgba(23, 20, 31, .94);
+  --cap-fg: #F9F4E8;
+  --cap-font: var(--pm-mono);
+  --cap-size: calc(32 * var(--u));
+  --cap-weight: 500;
+  --cap-radius: 0px;
+  --cap-bottom: calc(92 * var(--u));
+  --cap-accent: #EDB024;
+  --cap-mark: tick;
+  --cap-border: none;
+  --cap-shadow: none;
+}
+
+@media (orientation: portrait) {
+  :root {
+    --pm-margin: calc(90 * var(--u));
+    --pm-hud-x: calc(64 * var(--u));
+    --pm-hud-y: calc(110 * var(--u));
+    --pm-fs-title: calc(150 * var(--u));
+    --pm-fs-second: calc(80 * var(--u));
+    --cap-size: calc(36 * var(--u));
+    --cap-bottom: calc(300 * var(--u));
+  }
+}
+
+/* stage and card layers */
+.pm-stage { background: var(--pm-ink); overflow: hidden; font-family: var(--pm-sans); }
+.pm-card { position: absolute; inset: 0; overflow: hidden; color: var(--fg, var(--pm-cream)); }
+.pm-svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; }
+
+/* type */
+.pm-meta { font: 500 var(--pm-fs-meta)/1 var(--pm-mono); letter-spacing: calc(3 * var(--u)); opacity: .72; white-space: nowrap; }
+.pm-title { font: 900 var(--pm-fs-title)/.9 var(--pm-sans); letter-spacing: -0.02em; white-space: nowrap; }
+.pm-second { font: 900 var(--pm-fs-second)/1.05 var(--pm-heavy-cjk); letter-spacing: calc(2 * var(--u)); white-space: nowrap; }
+.pm-second.pm-ja { font-family: var(--pm-heavy-ja); }
+.pm-sub { font: 800 var(--pm-fs-sub)/1 var(--pm-sans); letter-spacing: 0; white-space: nowrap; }
+.pm-mega { font: 900 var(--pm-fs-mega)/.86 var(--pm-sans); letter-spacing: -0.03em; white-space: nowrap; }
+.pm-count { font: 900 var(--pm-fs-count)/.82 var(--pm-sans); letter-spacing: -0.05em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pm-index { position: absolute; bottom: max(calc(150 * var(--u)), calc(var(--cap-band, 0px) + 16 * var(--u))); font: 800 var(--pm-fs-index)/.8 var(--pm-sans); letter-spacing: calc(-10 * var(--u)); white-space: nowrap;
+            color: transparent; -webkit-text-stroke: calc(2 * var(--u)) var(--fg, #F9F4E8); opacity: .2; }
+
+/* mask slide-up: the wrapper clips, the inner line moves (y from 110 % to 0) */
+.pm-mask { display: block; overflow: hidden; padding: 0 calc(12 * var(--u)) .1em; margin: 0 calc(-12 * var(--u)); }
+.pm-mask > .pm-line { display: inline-block; }
+
+/* tag chip */
+.pm-tag { display: inline-block; font: 500 var(--pm-fs-tag)/calc(38 * var(--u)) var(--pm-mono); letter-spacing: calc(3 * var(--u));
+          height: calc(38 * var(--u)); padding: 0 calc(14 * var(--u)); background: var(--fg); color: var(--c2); white-space: nowrap; }
+.pm-tag.pm-accent { background: var(--pm-ember-2); color: var(--pm-cream); }
+
+/* HUD: mono corner lines + a tick progress bar of N items */
+.pm-hud { position: absolute; font: 500 var(--pm-fs-hud)/calc(26 * var(--u)) var(--pm-mono); letter-spacing: calc(3 * var(--u));
+          opacity: .8; white-space: nowrap; top: var(--pm-hud-y); }
+.pm-hud.pm-l { left: var(--pm-hud-x); }
+.pm-hud.pm-r { right: var(--pm-hud-x); text-align: right; }
+.pm-ticks { position: absolute; left: var(--pm-hud-x); right: var(--pm-hud-x); bottom: calc(40 * var(--u)); height: calc(20 * var(--u));
+            display: flex; justify-content: space-between; align-items: flex-end; }
+.pm-tick { width: calc(2 * var(--u)); height: calc(12 * var(--u)); background: currentColor; opacity: .28; }
+.pm-tick.pm-done { opacity: .75; }
+.pm-tick.pm-now { width: calc(4 * var(--u)); height: calc(20 * var(--u)); opacity: 1; }
+
+/* layout C panel (tone 0 on light hues, tone 4 on dark hues) with a 90u hairline grid */
+.pm-panel { position: absolute; left: 0; top: 0; bottom: 0; width: calc(820 * var(--u)); background: var(--panel, var(--c4));
+            transform-origin: 0 50%; }
+.pm-panel::after { content: ""; position: absolute; inset: 0;
+            background: repeating-linear-gradient(90deg, transparent 0 calc(90 * var(--u) - 1px), var(--hair, rgba(249,244,232,.1)) calc(90 * var(--u) - 1px) calc(90 * var(--u))); }
+
+/* chapter band: two grid rows tall, grows from the centre (scaleX) */
+.pm-band { position: absolute; left: 0; right: 0; height: calc(360 * var(--u)); background: var(--band, var(--c0)); transform-origin: 50% 50%; overflow: hidden; }
+.pm-hair { position: absolute; left: 0; right: 0; height: calc(2 * var(--u)); background: currentColor; opacity: .5; transform-origin: 50% 50%; }
+
+/* icon wall tile */
+.pm-tile { position: absolute; width: calc(180 * var(--u)); height: calc(180 * var(--u)); overflow: hidden; }

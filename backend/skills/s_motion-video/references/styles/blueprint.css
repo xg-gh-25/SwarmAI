@@ -1,0 +1,162 @@
+/* blueprint.css — Blueprint style tokens and signature blocks.
+ *
+ * UNIT CONVENTION (same in every style file):
+ *   --u is a LENGTH equal to one 1080p pixel scaled to the frame: min(100vw,100vh) / 1080.
+ *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
+ *   The runtime may override --u on :root; never redefine it inside a scene.
+ *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
+ * System fonts only; no imports, no web fonts. GSAP (one clock, pure draw(t)) writes transforms,
+ * dash offsets, clip insets and opacity; these classes set initial layout, never CSS animation or transition.
+ * The drawing itself is ONE inline SVG per scene in sheet units (viewBox = sheet size, 1 sheet unit = 1u at
+ * camera zoom 1). Stroke widths scale with --bpz = zoom^-0.35 so the on-screen width is w x zoom^0.65.
+ */
+:root {
+  --u: calc(min(100vw, 100vh) / 1080);
+
+  /* palette: blue and white only (+ one stamp ink, once per film) */
+  --bp-paper: #1B3A75;          /* base under the grain (measured sheet mean #1D3C77); also the knock-out fill */
+  --bp-paper-dark: #18336B;     /* coating low end */
+  --bp-paper-light: #2A58A6;    /* coating high end */
+  --bp-paper-deep: #162C58;     /* under a lifted object's shadow, wet stain core */
+  --bp-bleach: #809ECC;         /* sun-bleached edges, worn fold */
+  --bp-ink: #E7F0F9;            /* every line and letter */
+  --bp-ink-soft: rgba(231, 240, 249, .72);   /* thin text, field labels */
+  --bp-ink-faint: rgba(231, 240, 249, .38);  /* construction lines, ghosts, imprints */
+  --bp-table: #0D1116;          /* drafting cloth around the sheet (full-sheet wides only) */
+  --bp-stamp: #C23B2E;          /* the one non-blue colour: rubber-stamp verdict, once */
+  --bp-note-bg: rgba(12, 28, 62, .58);
+
+  /* fonts (macOS system stand-ins) */
+  --bp-hand: "Noteworthy", "Chalkboard SE", "Bradley Hand", "Hannotate SC", "HanziPen SC", "Kaiti SC", cursive;
+  --bp-tech: "DIN Alternate", "Avenir Next Condensed", "Avenir Next", "PingFang SC", sans-serif;
+  --bp-sign: "Snell Roundhand", "Apple Chancery", "Savoye LET", cursive;
+  --bp-mono: "SF Mono", Menlo, "PingFang SC", monospace;
+
+  /* type scale (screen u at camera zoom 1; inside the sheet SVG use the same numbers as font-size) */
+  --bp-fs-header: calc(112 * var(--u));     /* sheet title, letter-spaced 12u */
+  --bp-fs-fig: calc(64 * var(--u));         /* FIG. 2 */
+  --bp-fs-label: calc(34 * var(--u));       /* part labels, notes in a medium shot */
+  --bp-fs-note: calc(28 * var(--u));        /* GENERAL NOTES lines */
+  --bp-fs-dim: calc(26 * var(--u));         /* dimension numbers */
+  --bp-fs-field: calc(42 * var(--u));       /* title-block values */
+  --bp-fs-tag: calc(26 * var(--u));         /* EXPLODED VIEW, sub-lines, tech caps, tracking 5u */
+  --bp-fs-small: calc(16 * var(--u));       /* field labels TITLE / DATE / SCALE (only in close shots) */
+
+  /* grid */
+  --bp-safe-x: calc(96 * var(--u));
+  --bp-safe-y: calc(54 * var(--u));
+  --bp-cap-zone: calc(173 * var(--u));      /* bottom 16 %: no text */
+
+  /* captions (drawn by the runtime): a drawing note box */
+  --cap-bg: rgba(12, 28, 62, .62);
+  --cap-fg: #E7F0F9;
+  --cap-font: var(--bp-hand);
+  --cap-size: calc(38 * var(--u));
+  --cap-weight: 400;
+  --cap-radius: 0;
+  --cap-bottom: calc(56 * var(--u));
+  --cap-border: 1px solid rgba(232, 240, 250, .9);
+  --cap-shadow: inset 0 0 0 calc(5 * var(--u)) rgba(12, 28, 62, .62), inset 0 0 0 calc(5 * var(--u) + 1px) rgba(232, 240, 250, .7);
+  --cap-accent: #E7F0F9;
+  --cap-mark: tick;
+}
+@media (orientation: portrait) {
+  :root {
+    --bp-safe-x: calc(60 * var(--u));
+    --bp-fs-header: calc(92 * var(--u));
+    --cap-bottom: calc(220 * var(--u));
+    --cap-size: calc(40 * var(--u));
+  }
+}
+
+/* stage = the drafting table; #camera carries the sheet and is moved by draw(t) (transform-origin 0 0) */
+.bp-stage {
+  position: absolute; inset: 0; overflow: hidden; background: var(--bp-table);
+  font-family: var(--bp-hand); color: var(--bp-ink);
+}
+.bp-stage #camera { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+
+/* the sheet: flat paper base; its unevenness lives in .bp-grain ABOVE the ink so knock-out fills vanish */
+.bp-sheet {
+  position: absolute; left: 0; top: 0; background: var(--bp-paper);
+  box-shadow: calc(10 * var(--u)) calc(16 * var(--u)) calc(30 * var(--u)) rgba(0, 0, 0, .55);
+}
+.bp-sheet > svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; }
+
+/* ink layer: every line pale blue-white, round, slightly bled into the paper */
+.bp-ink {
+  fill: none; stroke: var(--bp-ink); stroke-linecap: round; stroke-linejoin: round;
+  filter: drop-shadow(0 0 calc(2.5 * var(--u)) rgba(231, 240, 249, .30)) drop-shadow(0 0 calc(7 * var(--u)) rgba(231, 240, 249, .12));
+}
+.bp-ink text { fill: var(--bp-ink); stroke: none; white-space: pre; }
+.bp-out  { stroke-width: calc(3.4 * var(--bpz, 1)); }   /* outlines, sheet border, title-block frame */
+.bp-det  { stroke-width: calc(2.1 * var(--bpz, 1)); }   /* detail, inner edges, gears, table rules */
+.bp-thin { stroke-width: calc(1.3 * var(--bpz, 1)); }   /* balloons, leaders' circles, hatch borders */
+.bp-hair { stroke-width: calc(1.0 * var(--bpz, 1)); }   /* dimensions, extension lines, hatching, centre lines */
+.bp-knock { fill: var(--bp-paper); }                    /* paper fill before an outline = occlusion */
+.bp-solid { fill: var(--bp-ink); stroke: none; }        /* arrowheads, leader dots */
+.bp-faint { stroke: var(--bp-ink-faint); }
+.bp-soft  { stroke: var(--bp-ink-soft); }
+/* line conventions (sheet units; already scaled with the paper) */
+.bp-center  { stroke-dasharray: 34 7 6 7; }
+.bp-hidden  { stroke-dasharray: 11 7; }
+.bp-phantom { stroke-dasharray: 30 6 5 6 5 6; }
+.bp-dotted  { stroke-dasharray: 2 7; }
+
+/* lettering inside the sheet SVG */
+.bp-t-hand   { font-family: var(--bp-hand); text-transform: uppercase; letter-spacing: 2px; }
+.bp-t-header { font-family: var(--bp-hand); text-transform: uppercase; font-size: 112px; letter-spacing: 12px; }
+.bp-t-fig    { font-family: var(--bp-hand); font-size: 64px; letter-spacing: 4px; }
+.bp-t-tech   { font-family: var(--bp-tech); font-weight: 700; text-transform: uppercase; letter-spacing: 5px; }
+.bp-t-field  { font-family: var(--bp-tech); font-size: 16px; letter-spacing: 1.5px; fill: var(--bp-ink-soft) !important; text-transform: uppercase; }
+.bp-t-sign   { font-family: var(--bp-sign); font-size: 46px; }
+.bp-t-dim    { font-family: var(--bp-hand); font-size: 26px; text-anchor: middle; }
+
+/* nib: the glowing point at the head of whatever is being drawn or lettered (SVG circle, r 16 sheet units) */
+.bp-nib { fill: url(#bp-nibg); stroke: none; visibility: hidden; }
+
+/* paper unevenness over the ink: low-frequency mottling, horizontal coating streaks, left-to-right fade.
+   Pair with the SVG fibre rect (filter #bp-fibre) and the fold creases below. */
+.bp-grain {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(ellipse 38% 30% at 22% 30%, rgba(42, 88, 166, .26), transparent 70%),
+    radial-gradient(ellipse 30% 26% at 70% 64%, rgba(42, 88, 166, .20), transparent 70%),
+    radial-gradient(ellipse 34% 30% at 48% 82%, rgba(16, 36, 80, .26), transparent 70%),
+    radial-gradient(ellipse 26% 22% at 84% 18%, rgba(16, 36, 80, .18), transparent 70%),
+    repeating-linear-gradient(180deg, rgba(0, 10, 40, 0) 0, rgba(0, 10, 40, .02) calc(70 * var(--u)), rgba(0, 10, 40, 0) calc(160 * var(--u))),
+    linear-gradient(90deg, rgba(10, 22, 60, .14), rgba(10, 22, 60, 0) 55%, rgba(120, 160, 220, .05));
+  box-shadow: inset 0 0 calc(60 * var(--u)) calc(8 * var(--u)) rgba(128, 158, 204, .22);
+}
+/* fold creases (sheet folded in quarters): bright edge / dark edge; wear specks come from SVG filter #bp-wear */
+.bp-fold-v, .bp-fold-h { position: absolute; pointer-events: none; }
+.bp-fold-v { top: 0; bottom: 0; left: calc(50% - 14 * var(--u)); width: calc(28 * var(--u));
+  background: linear-gradient(90deg, transparent, rgba(4, 14, 44, .16) 46%, rgba(170, 195, 235, .12) 54%, transparent); }
+.bp-fold-h { left: 0; right: 0; top: calc(50% - 14 * var(--u)); height: calc(28 * var(--u));
+  background: linear-gradient(180deg, transparent, rgba(170, 195, 235, .10) 46%, rgba(4, 14, 44, .14) 54%, transparent); }
+
+/* lens vignette over the whole frame (measured 1-2.5 L) */
+.bp-vignette { position: absolute; inset: 0; pointer-events: none; z-index: 50;
+  background: radial-gradient(ellipse 75% 75% at 50% 50%, transparent 55%, rgba(3, 8, 24, .12) 100%); }
+
+/* screen-space drawing note (when a scene letters a note box itself, above the caption band) */
+.bp-note {
+  position: absolute; display: flex; align-items: stretch; white-space: nowrap; box-sizing: border-box;
+  background: var(--bp-note-bg); border: 1px solid rgba(232, 240, 250, .9);
+  box-shadow: inset 0 0 0 calc(5 * var(--u)) var(--bp-note-bg), inset 0 0 0 calc(5 * var(--u) + 1px) rgba(232, 240, 250, .7);
+  padding: calc(14 * var(--u)) calc(30 * var(--u)) calc(14 * var(--u)) 0;
+  font: 400 calc(38 * var(--u))/1.2 var(--bp-hand); color: var(--bp-ink); text-transform: uppercase;
+}
+.bp-note-cell { width: calc(108 * var(--u)); margin-right: calc(16 * var(--u)); border-right: 1px solid rgba(232, 240, 250, .8);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font: 700 calc(17 * var(--u))/1.1 var(--bp-tech); letter-spacing: calc(3 * var(--u)); }
+.bp-note-cell b { font-size: calc(30 * var(--u)); letter-spacing: 0; }
+
+/* rubber stamp (HTML version; the SVG version takes filter #bp-stampink for the grainy ink) */
+.bp-stamp {
+  position: absolute; display: inline-block; padding: calc(10 * var(--u)) calc(30 * var(--u));
+  color: var(--bp-stamp); border: calc(7 * var(--u)) solid var(--bp-stamp);
+  outline: calc(2.4 * var(--u)) solid var(--bp-stamp); outline-offset: calc(-17 * var(--u));
+  font: 700 calc(72 * var(--u))/1 var(--bp-tech); letter-spacing: calc(10 * var(--u)); white-space: nowrap;
+  mix-blend-mode: normal; opacity: .9;
+}
