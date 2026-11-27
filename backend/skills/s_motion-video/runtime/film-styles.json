@@ -1,0 +1,62 @@
+{
+  "_about": "How the film layer (runtime/film-layer.js) takes its look from each ported style. scripts/film.py copies the entry of the storyboard's style into scenes/film-data.js; film.json 'classes' and 'tokens' override it per project. tokens: CSS variables of the style that the layer's neutral parts read (accent, ink, muted, rule, font); a token the style lacks falls back to the text colour and the inherited font. classes: the style's own class for a part, added next to the layer's neutral class, so the style's rules win; '{mask}' is replaced by the mask side. A style made with references/stylegen.md gets an entry here when it is ported (or a 'tokens' block in the project's film.json). tests/test_film_layer.py checks that every name here exists in the style's .css.",
+  "styles": {
+    "exec-brief": {
+      "tokens": {"accent": "--eb-accent", "ink": "--eb-ink", "muted": "--eb-mute", "rule": "--eb-rule", "font": "--eb-sans"},
+      "classes": {"kicker": "eb-kicker"}
+    },
+    "exec-dark": {
+      "tokens": {"accent": "--ed-accent", "ink": "--ed-text", "muted": "--ed-mute", "rule": "--ed-rule2", "font": "--ed-sans"},
+      "classes": {"plate": "ed-plate", "mask": "ed-shade-{mask}", "vignette": "ed-vignette", "kicker": "ed-kicker",
+                  "progress": "ed-progress", "progress_fill": "ed-progress-fill", "progress_mark": "ed-progress-mark"}
+    },
+    "dark-keynote": {
+      "tokens": {"accent": "--dk-accent", "ink": "--dk-text", "muted": "--dk-mute", "rule": "--dk-line", "font": "--dk-sans"},
+      "classes": {"vignette": "dk-vignette"}
+    },
+    "dataviz": {
+      "tokens": {"accent": "--dv-accent", "ink": "--dv-ink", "muted": "--dv-ink-soft", "rule": "--dv-rule", "font": "--dv-mono"},
+      "classes": {}
+    },
+    "iso-infographic": {
+      "tokens": {"ink": "--iso-ink", "muted": "--iso-ink-soft", "rule": "--iso-line", "font": "--iso-sans"},
+      "classes": {}
+    },
+    "whiteboard": {
+      "tokens": {"accent": "--wb-accent", "ink": "--wb-dark", "muted": "--wb-ghost", "rule": "--wb-ghost", "font": "--wb-hand"},
+      "classes": {}
+    },
+    "swiss-motion": {
+      "tokens": {"accent": "--sw-signal", "ink": "--sw-ink", "muted": "--sw-mute", "rule": "--sw-grid", "font": "--sw-sans"},
+      "classes": {}
+    },
+    "living-screencast": {
+      "tokens": {"accent": "--ls-clay", "ink": "--ls-ink", "muted": "--ls-mute", "rule": "--ls-line", "font": "--ls-sans"},
+      "classes": {}
+    },
+    "hologram-hud": {
+      "tokens": {"accent": "--hh-accent", "ink": "--hh-hi", "muted": "--hh-dim", "rule": "--hh-line-28", "font": "--hh-mono"},
+      "classes": {"vignette": "hh-vignette"}
+    },
+    "blueprint": {
+      "tokens": {"accent": "--bp-stamp", "ink": "--bp-ink", "muted": "--bp-ink-soft", "rule": "--bp-ink-faint", "font": "--bp-tech"},
+      "classes": {"vignette": "bp-vignette"}
+    },
+    "anatomy": {
+      "tokens": {"accent": "--an-lit", "ink": "--an-text", "muted": "--an-muted", "rule": "--an-rule", "font": "--an-mono"},
+      "classes": {}
+    },
+    "ink-wash": {
+      "tokens": {"accent": "--iw-zhu", "ink": "--iw-ink", "muted": "--iw-ink-cool", "font": "--iw-kai"},
+      "classes": {"vignette": "iw-vignette"}
+    },
+    "pictogram-motion": {
+      "tokens": {"accent": "--pm-ember-0", "ink": "--pm-ink", "font": "--pm-mono"},
+      "classes": {}
+    },
+    "game-show": {
+      "tokens": {"accent": "--gs-yellow", "ink": "--gs-ink", "font": "--gs-hand"},
+      "classes": {}
+    }
+  }
+}

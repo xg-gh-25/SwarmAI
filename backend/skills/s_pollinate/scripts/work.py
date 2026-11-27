@@ -16,7 +16,9 @@ Commands (design section 13.2):
           ``--kind video`` registers a video project with no versions as soon as
           it has a brief.md or storyboard.json (or a film in out/*.mp4): it is
           listed with the works, in progress until the film exists; open, cut
-          and render refuse it
+          and render refuse it. ``--derived-from <folder>`` records the earlier
+          film a new cut was made from (``derived_from`` in work.json and the
+          registry entry)
   open    start a revision: when the source on disk differs from the current
           version (the person edited it), store it first as ``<current>-user``;
           then record the declared scope (``--scope``, ``--add``, ``--remove``)
@@ -494,8 +496,11 @@ def register(wdir: Path, meta: dict) -> None:
     try:
         reg = load_registry()
         works = [w for w in reg["works"] if w.get("path") != str(wdir)]
-        works.append({"path": str(wdir), "kind": meta["kind"], "title": meta.get("title") or wdir.name,
-                      "updated": now_iso()})
+        entry = {"path": str(wdir), "kind": meta["kind"], "title": meta.get("title") or wdir.name,
+                 "updated": now_iso()}
+        if meta.get("derived_from"):
+            entry["derived_from"] = meta["derived_from"]
+        works.append(entry)
         reg["works"] = works
         reg["schema"] = 1
         write_json(registry_path(), reg)
@@ -728,7 +733,10 @@ def _adopt_video(wdir: Path, args) -> int:
     Its title, size and style come from the arguments, else from the video's
     storyboard.json (title, width, height, style) when it already has one; otherwise they
     stay null and the overlay reads them from the storyboard once it is written (a video
-    registered at its brief has none yet), then the folder name."""
+    registered at its brief has none yet), then the folder name.
+
+    ``--derived-from`` (a new cut made from an earlier film, e.g. by the video skill's
+    derive.py) is stored as ``derived_from``: the earlier project's absolute path."""
     has_film = any(p.is_file() for p in (wdir / "out").glob("*.mp4"))
     if not (has_film or (wdir / "brief.md").is_file() or (wdir / "storyboard.json").is_file()):
         raise UsageError(f"{wdir} has no brief.md, storyboard.json or out/*.mp4; "
@@ -747,13 +755,28 @@ def _adopt_video(wdir: Path, args) -> int:
         size = None
     title = args.title or (board.get("title") if isinstance(board.get("title"), str) else None)
     style = args.style or (board.get("style") if isinstance(board.get("style"), str) else None)
+    derived = _derived_from(wdir, getattr(args, "derived_from", None))
     meta = {"schema": SCHEMA, "kind": VIDEO, "title": title, "style": style, "size": size,
             "src": None, "slides": [], "current": None, "open": None, "versions": [],
             "session": _session()}
+    if derived:
+        meta["derived_from"] = derived
     save_meta(wdir, meta)
     register(wdir, meta)
     _print({"work": str(wdir), "kind": VIDEO, "title": title or wdir.name, "film": has_film})
     return 0
+
+
+def _derived_from(wdir: Path, value):
+    """The folder a video was derived from (its earlier film), as an absolute path, or None."""
+    if not value:
+        return None
+    src = Path(value).expanduser().resolve()
+    if not src.is_dir():
+        raise UsageError(f"--derived-from {value}: not a folder")
+    if src == wdir.resolve():
+        raise UsageError("--derived-from names the work itself")
+    return str(src)
 
 
 def cmd_adopt(args) -> int:
@@ -762,6 +785,8 @@ def cmd_adopt(args) -> int:
         raise UsageError(f"{wdir} is not a folder")
     if (wdir / "work.json").exists():
         raise UsageError(f"{wdir} is already a work")
+    if getattr(args, "derived_from", None) and args.kind != VIDEO:
+        raise UsageError("--derived-from is for --kind video (a new cut made from an earlier film)")
     if args.kind == VIDEO:
         return _adopt_video(wdir, args)
     if args.src:
@@ -1373,6 +1398,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title")
     p.add_argument("--style")
     p.add_argument("--size")
+    p.add_argument("--derived-from", dest="derived_from",
+                   help="video only: the earlier film's project folder this one was made from (recorded as derived_from)")
     p = sub.add_parser("open", help="start a revision with a declared scope")
     p.add_argument("--dir", required=True)
     p.add_argument("--scope", required=True, help="slide ids that may change, comma separated (may be empty)")

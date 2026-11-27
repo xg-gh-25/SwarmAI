@@ -13,6 +13,9 @@ you deliver `out/<slug>.mp4` plus a short summary. This file is the order of wor
 | Shot types and their parameters | `references/shot-types.md` |
 | The look | `references/styles/INDEX.md`, then `references/styles/<id>.md` + `<id>.css` |
 | Writing a scene page | `references/scene-contract.md`, example `templates/scene.html` |
+| The parts every scene shares (plate, mask, vignette, kicker, progress bar, push) | `references/scene-contract.md` § The film layer, `templates/film.json`, `scripts/film.py` |
+| Briefing parallel scene writers | `templates/scene-writer-brief.md` |
+| A new cut or version of an earlier film | § Revise or extend a film, `scripts/derive.py` |
 | Judging the cut | `references/craft-rubric.md` |
 | A new style from a reference video | `references/stylegen.md` |
 
@@ -42,7 +45,7 @@ counted limits (stop when used up). *Goal* = intent and named anti-patterns (use
    explainers, `bright` for ads (moods: `bgm.py --help`); style picked from `INDEX.md`
    by audience and tone. Say in one line what you chose.
 
-Create the project: `P=~/.swarm-ai/SwarmWS/Services/motion-video/projects/<yyyy-mm-dd>-<slug>`.
+Create the project: `P="${SWARM_WORKSPACE:-$HOME/.swarm-ai/SwarmWS}/Services/motion-video/projects/<yyyy-mm-dd>-<slug>"`.
 
 ## 1. Research (when the film states facts)
 
@@ -81,10 +84,13 @@ Pollinate only lists the film; this skill keeps making and revising it.
 ## 4. Voice first — durations come from the voice
 
 ```bash
-python3 "$SKILL_DIR/scripts/tts.py" --project "$P"            # writes audio/voice/* and scene durations
+python3 "$SKILL_DIR/scripts/tts.py"  --project "$P"           # writes audio/voice/* and scene durations
+python3 "$SKILL_DIR/scripts/film.py" --project "$P"           # film data for the shared layer: run after EVERY tts.py
 ```
 For Chinese, put polyphones, English terms and brand names in `$P/pronounce.json` before running.
-Scenes without narration get a hand-set `duration`.
+Scenes without narration get a hand-set `duration`. `film.py` writes `scenes/film-data.js` (film length,
+scene starts, chapter marks, kickers) from the storyboard and `film.json`; a scene whose duration no longer
+matches it fails `check.py` with a message naming `film.py`.
 
 ## 5. Sample scene, then the design contract
 
@@ -94,16 +100,21 @@ Scenes without narration get a hand-set `duration`.
    `python3 "$SKILL_DIR/scripts/render.py" --project "$P" --scene S01 --preview`; read the 3
    stills. **Budget: at most 3 checks per scene**, then record the problem and move on.
 3. When it passes, write `design.md` (≤ 30 lines): palette, type scale, caption look, shot
-   grammar, how scenes join, shared blocks in `scenes/shared.css`. Freeze `shared.css` now.
+   grammar, how scenes join, shared blocks in `scenes/shared.css`. Write `film.json` (from
+   `templates/film.json`): the shared parts the style asks for (exec-dark: plate, mask, vignette,
+   kicker, progress), then re-run `film.py`. Never rebuild these parts in a scene or a project
+   script: every scene calls `FL.setup(tl, opts)`. Freeze `shared.css` and `film.json` now.
 
 ## 6. All other scenes
 
-- Write each scene following `design.md`. For more than 6 scenes, hand groups of 2–3 scenes to
-  background sub-agents in one message. Each sub-agent gets: `project-contract.md`,
-  `scene-contract.md`, the style file, `design.md`, its scenes' storyboard entries and word
-  timings. It writes only its own `scenes/SNN.html`, runs only `check.py --scene`, never
-  renders the film, and reports one line per scene plus anything the main agent must handle
-  (a shared block it needs, a storyboard line that cannot be shown, a missing asset).
+- Write each scene following `design.md` and `scene-contract.md` § Writing rules. For more than 6
+  scenes, fill `templates/scene-writer-brief.md` once (project and skill paths, style, the shared
+  files, 3–9 finished example scenes covering the film's layouts, this film's own rules), save it in
+  the project, and hand groups of 2–3 scenes to background sub-agents in one message, each prompt
+  being the brief plus its scene ids. A writer edits only its own `scenes/SNN.html`, runs only
+  `check.py --scene` and `render.py --scene --preview` (at most 3 rounds), never renders the film,
+  and reports one line per scene plus anything the main agent must handle (a shared block it needs,
+  a storyboard line that cannot be shown, a missing asset).
 - Then `check.py --project "$P"` for all scenes; fix every failure.
 
 ## 7. Render, music, mix
@@ -145,7 +156,43 @@ overlay lists it as done.
 - First send a per-scene change plan ("S02: …; S04: …"), then change only those scenes.
 - "Polish" keeps narration and voice fixed and improves only the picture.
 - Style swap keeps narration and voice; method swap rewrites script and storyboard, keeps the style.
-- If the person edited the storyboard, their version is the truth: re-run `tts.py` for changed lines.
+- If the person edited the storyboard, their version is the truth: re-run `tts.py` for changed lines,
+  then `film.py`.
+- A new cut of a finished film (longer, shorter, re-ordered, a second language of the same picture) is a new
+  project made from the old one: § Revise or extend a film.
+
+## Revise or extend a film
+
+A new version that keeps much of an earlier film starts from it instead of from scratch. The old project
+stays as it was; the new one is its own Pollinate work.
+
+1. **Plan with the person's material in hand.** List the old scenes and decide what the new cut keeps,
+   changes, adds and drops. **Never shorten the person's material silently:** when the cut must drop
+   content (a scene, a claim, a number, a step, a quote), name exactly what is dropped and ask before
+   producing (one question, with the list). A longer cut adds; it does not rewrite what already works.
+2. **Write `plan.json`** (format in `scripts/derive.py --help` and its header): the new scenes in play
+   order; `{"reuse": "S04"}` keeps an old scene; fields next to `reuse` change it (`narration`, `visual`,
+   `title`, `transition`); a new scene has `title`, `narration`, `visual`, `shot_type`. Film-level fields
+   (`title`, `target_seconds`) go in `"storyboard"`.
+3. **Derive** into a new folder (not inside the old one):
+   ```bash
+   OLD="<old project>"; P="${SWARM_WORKSPACE:-$HOME/.swarm-ai/SwarmWS}/Services/motion-video/projects/<yyyy-mm-dd>-<slug>"
+   python3 "$SKILL_DIR/scripts/derive.py" --from "$OLD" --to "$P" --plan plan.json
+   ```
+   Reused pages are copied byte for byte with the files they load; a reused scene with identical narration
+   keeps its voice; changed narration is marked for re-voicing; the output lists new scenes to write and the
+   old scenes the cut drops (check that list against what the person agreed to). `derive.json` records it.
+4. **Register** the new project, naming its origin:
+   ```
+   "$SWARM_BACKEND_BIN" py "${SWARM_WORKSPACE:-$HOME/.swarm-ai/SwarmWS}/.claude/skills/s_pollinate/scripts/work.py" adopt --dir "$P" --kind video --derived-from "$OLD"
+   ```
+5. **Voice, film data, carry:** `tts.py` (it re-voices changed and new lines and reuses the copied voices),
+   `film.py`, then `derive.py --carry --to "$P"`: a reused scene keeps its finished render when its picture
+   cannot have changed (same page and files, voice, duration, fade tail and film-layer entry). With the
+   progress bar on, a scene whose place in the film moved has a different bar, so it re-renders.
+6. **Write the new scenes** (§6, the brief works the same) and fix reused scenes whose cue words changed
+   (`check.py` names them). Then `check.py` for all scenes and §7–§9 as for a new film: `render.py`
+   renders only new and changed scenes.
 
 ## Relation to Pollinate
 

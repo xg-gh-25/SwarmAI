@@ -1,0 +1,14 @@
+{
+  "_about": "The film layer's settings for this project (copy to <project>/film.json and keep only what you change; every key is optional). Turn on what the style file asks for (exec-dark: kicker, progress, plate, mask, vignette). Re-run scripts/film.py after changing this file. Scenes may pick another mask side, switch a part off or change plate class/drift in FL.setup(tl, opts); kicker and progress can only be switched on here.",
+  "plate": {"image": "assets/plate.jpg", "images": {}, "class": "", "drift": 0.09},
+  "mask": "left",
+  "vignette": true,
+  "kicker": true,
+  "progress": true,
+  "push": 1.03,
+  "origin": "50% 45%",
+  "chapters": ["chapter-card"],
+  "skip": {"kicker": ["title-card", "chapter-card", "logo-endcard"], "progress": ["title-card", "logo-endcard"]},
+  "classes": {},
+  "tokens": {}
+}

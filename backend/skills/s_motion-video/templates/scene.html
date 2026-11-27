@@ -6,6 +6,9 @@
 <!-- 1. runtime first: GSAP, then the scene runtime (sets --u, window.MV, captions, __mvSeek) -->
 <script src="/skill/runtime/gsap.min.js"></script>
 <script src="/skill/runtime/scene-runtime.js"></script>
+<!-- the film layer (plate, mask, vignette, kicker, progress bar, camera push) and this film's data from scripts/film.py -->
+<script src="/skill/runtime/film-layer.js"></script>
+<script src="/project/scenes/film-data.js"></script>
 <!-- 2. the film's style (file name = storyboard "style"), then the project's optional shared styles -->
 <link rel="stylesheet" href="/skill/references/styles/exec-brief.css">
 <link rel="stylesheet" href="/project/scenes/shared.css">
@@ -43,10 +46,11 @@
 <script>
   // One paused timeline. Every tween is fromTo (or set) at an ABSOLUTE time taken from MV.cue(keyword).
   const tl = gsap.timeline({ paused: true, defaults: { ease: "power3.out", duration: 0.6 } });
-  const T = MV.duration, u = MV.u;
+  const u = MV.u;
 
-  // shot-long slow push: the frame is never fully still
-  tl.fromTo("#camera", { scale: 1 }, { scale: 1.03, duration: T, ease: "none", transformOrigin: "50% 45%" }, 0);
+  // the film's shared layer, right after creating the timeline: the parts film.json switches on, plus the
+  // shot-long camera push (the frame is never fully still). Per-scene choices go here, e.g. { mask: "left" }.
+  FL.setup(tl, { origin: "50% 45%" });
 
   // 1) title on its keyword
   tl.fromTo("#title", { opacity: 0, y: 40 * u }, { opacity: 1, y: 0, duration: 0.7 }, MV.cue("cloud bill"));
@@ -58,7 +62,7 @@
   });
 
   // 3) stat + bars on "quarter"; clamped so the last move (0.6 s + 2 x 0.12 s stagger) settles by MV.end()
-  const tStat = Math.min(MV.cue("quarter"), MV.end() - 0.84);
+  const tStat = FL.at("quarter", 0.84);
   const counter = { v: 0 }, num = document.getElementById("num");
   tl.fromTo("#stat", { opacity: 0, y: 30 * u }, { opacity: 1, y: 0, duration: 0.5 }, tStat);
   tl.fromTo(counter, { v: 0 }, { v: 90, duration: 0.6, ease: "power1.out",
