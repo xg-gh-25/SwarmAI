@@ -27,7 +27,7 @@ vi.mock('../../../services/hive', async (orig) => ({
   ...(await orig<typeof import('../../../services/hive')>()),
   hiveService: {
     listInstances: (...a: unknown[]) => mocks.instances(...a), listAccounts: (...a: unknown[]) => mocks.accounts(...a),
-    listSsh: vi.fn(() => new Promise(() => {})), setIdleStop: vi.fn(),
+    listSsh: vi.fn(async () => []), setIdleStop: vi.fn(),
     deleteInstance: vi.fn(), retryInstance: vi.fn(), stopInstance: vi.fn(), startInstance: vi.fn(), listAccess: vi.fn(async () => []), addAccess: vi.fn(), revokeAccess: vi.fn(), rotateHostKey: vi.fn(),
     brainStatus: vi.fn(() => new Promise(() => {})),
   },
@@ -73,7 +73,8 @@ describe('the Settings tab shows what it has at once', () => {
     expect(await screen.findAllByTestId('so-hive-row')).toHaveLength(1);
     expect(screen.getByTestId('so-elastic-state')).toHaveTextContent('Loading');
     expect(screen.getByTestId('so-elastic-state')).not.toHaveTextContent('Off');
-    expect(screen.getByTestId('so-cap-elastic')).toHaveTextContent('Loading');
+    // the answer on top claims nothing while a part it counts is still unread
+    expect(screen.getByTestId('so-verdict').dataset.state).toBe('checking');
     expect((screen.getByTestId('so-elastic-switch') as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -81,6 +82,7 @@ describe('the Settings tab shows what it has at once', () => {
     mocks.get.mockImplementation(never);
     render(<SwarmOutSettings />);
     await screen.findAllByTestId('so-hive-row');
+    fireEvent.click(screen.getByTestId('so-machine-add'));
     expect((screen.getByTestId('so-hive-add') as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -91,14 +93,17 @@ describe('the Settings tab shows what it has at once', () => {
     await waitFor(() => expect(screen.getByTestId('so-elastic-state')).toHaveTextContent('Could not read its status'));
     expect(screen.getByTestId('so-elastic-state')).not.toHaveTextContent('Loading');
     await screen.findAllByTestId('so-hive-row');
+    fireEvent.click(screen.getByTestId('so-machine-add'));
     await waitFor(() => expect((screen.getByTestId('so-hive-add') as HTMLButtonElement).disabled).toBe(false));
   });
 
-  it('with the account read, a failed status says so on the account card too', async () => {
+  it('a failed Elastic Workers status says so, and the answer on top does not wait for it', async () => {
     mocks.elastic.mockRejectedValue(new Error('500'));
     render(<SwarmOutSettings />);
-    await waitFor(() => expect(screen.getByTestId('so-cap-elastic')).toHaveTextContent('Could not read its status'));
-    expect(screen.getByTestId('so-cap-elastic')).not.toHaveTextContent('Loading');
+    await waitFor(() => expect(screen.getByTestId('so-elastic-state')).toHaveTextContent('Could not read its status'));
+    await waitFor(() => expect(screen.getByTestId('so-verdict').dataset.state).not.toBe('checking'));
+    // the resident Hive is running: work can run without Elastic Workers
+    expect(screen.getByTestId('so-verdict').dataset.state).toBe('can');
   });
 
   it('a reopened tab shows its last data at once', async () => {
@@ -118,6 +123,7 @@ describe('the Settings tab shows what it has at once', () => {
   it('a default changed on the tab is what a reopened tab shows', async () => {
     mocks.cfg.mockResolvedValue({ hiveIdleStopMinutes: 120 });
     const first = render(<SwarmOutSettings />);
+    fireEvent.click(await screen.findByTestId('so-defaults-edit'));
     const sel = await screen.findByTestId('so-idle') as HTMLSelectElement;
     await waitFor(() => expect(sel.value).toBe('120'));
     for (const m of [mocks.get, mocks.elastic, mocks.instances, mocks.accounts, mocks.cfg]) m.mockImplementation(never);
@@ -125,20 +131,27 @@ describe('the Settings tab shows what it has at once', () => {
     await waitFor(() => expect(sel.value).toBe('30'));
     first.unmount();
     render(<SwarmOutSettings />);
+    expect(screen.getByTestId('so-defaults-line')).toHaveTextContent('Stops after 30 min idle');
+    fireEvent.click(screen.getByTestId('so-defaults-edit'));
     expect((screen.getByTestId('so-idle') as HTMLSelectElement).value).toBe('30');
   });
 
   it('fills the panel, and on a narrow panel each row stacks its label above its value', async () => {
+    // an opened machine's fields: label beside value when wide, above it when narrow
+    const field = async () => {
+      fireEvent.click(within((await screen.findAllByTestId('so-hive-row'))[0]).getByTestId('so-hive-toggle'));
+      return screen.getByTestId('so-hive-login');
+    };
     const { unmount } = render(<SwarmOutSettings />);
-    const wide = await screen.findByTestId('so-account-id');
+    const wide = await field();
     expect(screen.getByTestId('swarm-out-settings').className).not.toMatch(/max-w-/);
     expect(wide.dataset.compact).toBeUndefined();
-    expect(wide.firstElementChild!.className).toMatch(/w-\[150px\]/);
+    expect(wide.firstElementChild!.className).toMatch(/w-\[130px\]/);
     unmount();
     render(<SwarmOutSettings compact />);
-    const narrow = await screen.findByTestId('so-account-id');
+    const narrow = await field();
     expect(narrow.dataset.compact).toBe('true');
     expect(narrow.className).toMatch(/flex-col/);
-    expect(narrow.firstElementChild!.className).not.toMatch(/w-\[150px\]/);
+    expect(narrow.firstElementChild!.className).not.toMatch(/w-\[130px\]/);
   });
 });

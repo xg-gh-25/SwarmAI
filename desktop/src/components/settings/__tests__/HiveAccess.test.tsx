@@ -60,9 +60,9 @@ describe('HiveAccess', () => {
     expect(panel.textContent).not.toContain('••••');
     expect(mocks.list).toHaveBeenCalledWith('h1');
 
-    // (2) the list: the old shared password under its own name, with the hint
+    // (2) the list: the old shared password under its own name, saying it still works
     expect(within(panel).getByTestId('hive-access-row-admin')).toHaveTextContent('Old shared password');
-    expect(within(panel).getByTestId('hive-access-row-admin')).toHaveTextContent('Revoking it is recommended');
+    expect(within(panel).getByTestId('hive-access-row-admin')).toHaveTextContent('still works for anyone who has it');
     expect(within(panel).getByTestId('hive-access-row-bob')).toHaveTextContent('bob');
 
     // (3) add access: the password shows once, Copy all copies it, Done discards it
@@ -70,9 +70,18 @@ describe('HiveAccess', () => {
     fireEvent.change(within(panel).getByTestId('hive-access-name'), { target: { value: 'Alice' } });
     fireEvent.click(within(panel).getByTestId('hive-access-create'));
     await waitFor(() => expect(mocks.add).toHaveBeenCalledWith('h1', 'alice'));
-    const grant = await within(panel).findByTestId('hive-access-grant');
+    // the one-time password is a dialog over the page, not a block in the list
+    const grant = await screen.findByTestId('hive-access-grant');
+    expect(grant).toHaveAttribute('role', 'dialog');
+    expect(within(panel).queryByTestId('hive-access-grant')).toBeNull();
     expect(within(grant).getByTestId('hive-access-password')).toHaveTextContent(SECRET);
-    expect(grant).toHaveTextContent('will not be shown again');
+    expect(grant).toHaveTextContent('shown only now');
+    expect(grant).toHaveTextContent('revoke it and add the person again');
+    // the only copy of the password is not lost by accident: focus is not on Done (a second
+    // Enter from the name field), and a click outside does not close it
+    expect(document.activeElement).not.toBe(within(grant).getByTestId('hive-access-done'));
+    fireEvent.click(screen.getByTestId('hive-access-grant-scrim'));
+    expect(screen.getByTestId('hive-access-grant')).toBeInTheDocument();
     fireEvent.click(within(grant).getByTestId('hive-access-copy-all'));
     await waitFor(() => expect(mocks.copy).toHaveBeenCalledTimes(1));
     const copied = String(mocks.copy.mock.calls[0][0]);
@@ -80,8 +89,8 @@ describe('HiveAccess', () => {
     expect(copied).toContain('alice');
     expect(copied).toContain(SECRET);
     fireEvent.click(within(grant).getByTestId('hive-access-done'));
-    expect(within(panel).queryByTestId('hive-access-grant')).toBeNull();
-    expect(panel.textContent).not.toContain(SECRET);
+    expect(screen.queryByTestId('hive-access-grant')).toBeNull();
+    expect(document.body.textContent).not.toContain(SECRET);
 
     // (4) revoke asks first, then calls revokeAccess
     fireEvent.click(within(panel).getByTestId('hive-access-revoke-bob'));
@@ -99,6 +108,13 @@ describe('HiveAccess', () => {
     expect(await screen.findByTestId('hive-access-error')).toBeInTheDocument();
     expect(screen.queryByTestId('hive-access-grant')).toBeNull();
     unmount();
+
+    // a list that cannot be read says so and can be read again (never "Reading…" for good)
+    mocks.list.mockRejectedValueOnce(new Error('500'));
+    const second = render(<HiveAccess instance={HIVE} />);
+    fireEvent.click(await screen.findByTestId('hive-access-retry'));
+    expect(await screen.findByTestId('hive-access-list')).toBeInTheDocument();
+    second.unmount();
 
     mocks.list.mockClear();
     render(<HiveAccess instance={{ ...HIVE, status: 'stopped' }} />);

@@ -151,13 +151,15 @@ describe('Swarm Out as the only place for Hives', () => {
     mocks.del.mockResolvedValue(undefined);
     fireEvent.click(await screen.findByTestId('so-hive-delete-go'));
     await waitFor(() => expect(mocks.del).toHaveBeenCalledWith('h1'));
-    // add one: the cost is named, nothing is created before the confirm
+    // add one: which kind first, then the cost is named, nothing is created before the confirm
+    fireEvent.click(screen.getByTestId('so-machine-add'));
     fireEvent.click(screen.getByTestId('so-hive-add'));
     expect(mocks.setFleet).not.toHaveBeenCalled();
     expect(screen.getByTestId('so-hive-add-go')).toHaveTextContent('119');
     fireEvent.click(screen.getByTestId('so-hive-add-go'));
     await waitFor(() => expect(mocks.setFleet).toHaveBeenCalledWith({ desired_count: 2 }));
-    // the idle stop time is the person's setting
+    // the idle stop time is the person's setting (defaults open with Edit)
+    fireEvent.click(screen.getByTestId('so-defaults-edit'));
     fireEvent.change(screen.getByTestId('so-idle'), { target: { value: '60' } });
     await waitFor(() => expect(mocks.updateCfg).toHaveBeenCalledWith({ hiveIdleStopMinutes: 60 }));
   });
@@ -232,6 +234,7 @@ describe('Swarm Out as the only place for Hives', () => {
     mocks.get.mockResolvedValue(ACCOUNT({ hive: { state: 'cannot_build', desired: 3, counted: 1, short: 2, instance_type: 'm7g.xlarge',
       region: 'us-east-1', prices: { 'm7g.xlarge': 119 }, capability: { status: 'missing', detail: 'x' } } }));
     render(<SwarmOutSettings />);
+    fireEvent.click(await screen.findByTestId('so-machine-add'));
     fireEvent.click(await screen.findByTestId('so-hive-add'));
     fireEvent.click(screen.getByTestId('so-hive-add-go'));
     await waitFor(() => expect(mocks.setFleet).toHaveBeenCalledWith({ desired_count: 4 }));

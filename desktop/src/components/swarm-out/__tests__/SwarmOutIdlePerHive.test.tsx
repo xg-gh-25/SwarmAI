@@ -95,10 +95,11 @@ describe('each Resident Hive has its own idle stop', () => {
     expect(within(row).queryByTestId('so-hive-idle')).toBeNull();              // closed until opened
     fireEvent.click(within(row).getByTestId('so-hive-toggle'));
     const sel = within(row).getByTestId('so-hive-idle') as HTMLSelectElement;
-    expect(within(row).getByTestId('so-hive-idle-row')).toHaveTextContent('Stop when idle for');
+    // "Keep running", its choices in the words the closed rows use (never "stop when idle for: always on")
+    expect(within(row).getByTestId('so-hive-idle-row')).toHaveTextContent('Keep running');
     expect(Array.from(sel.options).map((o) => [o.value, o.textContent])).toEqual([
-      ['0', 'Always on'], ['30', '30 minutes'], ['60', '60 minutes'], ['120', '120 minutes'], ['240', '240 minutes'],
-      ['480', '480 minutes'], ['default', 'Default (120 minutes)']]);
+      ['0', 'Always on'], ['30', 'Stops after 30 min idle'], ['60', 'Stops after 1 h idle'], ['120', 'Stops after 2 h idle'],
+      ['240', 'Stops after 4 h idle'], ['480', 'Stops after 8 h idle'], ['default', 'Default (Stops after 2 h idle)']]);
     expect(sel.value).toBe('default');
     fireEvent.change(sel, { target: { value: '0' } });
     await waitFor(() => expect(mocks.setIdle).toHaveBeenCalledWith('remote-explorer', 0));
@@ -133,6 +134,7 @@ describe('each Resident Hive has its own idle stop', () => {
   it('the default selector says it is the default and still writes the app setting', async () => {
     render(<SwarmOutSettings />);
     const rules = await screen.findByTestId('so-set-rules');
+    fireEvent.click(within(rules).getByTestId('so-defaults-edit'));
     expect(rules).toHaveTextContent('Default: stop when idle for');
     expect(rules).toHaveTextContent('for new Hives and Hives without their own setting');
     const sel = within(rules).getByTestId('so-idle');
@@ -152,8 +154,9 @@ describe('each Resident Hive has its own idle stop', () => {
     fireEvent.click(within(row).getByTestId('so-hive-toggle'));
     const sel = within(row).getByTestId('so-hive-idle') as HTMLSelectElement;
     expect(sel.options[0].textContent).toBe('常开');
-    expect(sel.options[sel.options.length - 1].textContent).toBe('默认（120 分钟）');
-    expect(await screen.findByTestId('so-set-rules')).toHaveTextContent('默认：闲置多久自动停');
+    expect(sel.options[sel.options.length - 1].textContent).toBe('默认（闲置 2 小时后停）');
+    fireEvent.click(within(await screen.findByTestId('so-set-rules')).getByTestId('so-defaults-edit'));
+    expect(screen.getByTestId('so-set-rules')).toHaveTextContent('默认：闲置多久自动停');
   });
 
   it('the policy words for every kind of value', () => {

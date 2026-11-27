@@ -16,6 +16,7 @@
  * tab) it pins to the viewport.
  */
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 // the app's i18next instance (initialised in src/i18n, imported by main.tsx)
 import i18n from 'i18next';
@@ -334,31 +335,120 @@ export function DeployProgress({ instance }: { instance: HiveInstance }) {
 
 // ── Who can sign in (Hive access) ─────────────────────────────────
 
+/** The address a person opens to reach a Hive in a browser, or '' when it has none yet. */
+export function hiveUrl(inst: HiveInstance): string {
+  return inst.cloudfrontDomain ? `https://${inst.cloudfrontDomain}` : inst.ec2PublicIp ? `http://${inst.ec2PublicIp}` : '';
+}
+
+/** The one-time result of adding a person: a dialog over everything, so the only password
+ *  ever on screen is never lost inside a list. Only Done or Escape discards it: a click
+ *  outside (or a text selection released outside) does not, and focus starts on the dialog
+ *  itself, not on Done, so a repeated Enter from the name field cannot discard it either. */
+function AccessGrantDialog({ grant, url, onClose }: { grant: HiveAccessGrant; url: string; onClose: () => void }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogLayer(true, dialogRef, onClose);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const address = grant.url || url;
+  const copyAll = async () => {
+    if (await copyToClipboard(t('ui.hiveComponents.accessShareText', { url: address, user: grant.user, password: grant.password }))) {
+      setCopied(true);
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 2000);
+    }
+  };
+  // pt-11 + max-h-full: below the macOS title bar, like the other dialogs here
+  return createPortal(
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4 pb-4 pt-11" data-testid="hive-access-grant-scrim">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="hive-access-grant-title" tabIndex={-1}
+        className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl p-5 w-[420px] max-w-full max-h-full overflow-y-auto outline-none"
+        data-testid="hive-access-grant">
+        <h3 id="hive-access-grant-title" className="m-0 text-heading font-semibold text-[var(--color-text)]">
+          {t('ui.hiveComponents.accessGrantTitle', { name: grant.user })}</h3>
+        <p className="mt-1 mb-4 text-small text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessGrantLead', { name: grant.user })}</p>
+        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 px-3.5 py-3 rounded-lg bg-[var(--color-bg)] text-small min-w-0">
+          <span className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessUrl')}</span>
+          <code className="text-[var(--color-text)] select-all break-all">{address}</code>
+          <span className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessUser')}</span>
+          <code className="text-[var(--color-text)] select-all">{grant.user}</code>
+          <span className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessPassword')}</span>
+          <code className="text-[var(--color-text)] select-all break-all" data-testid="hive-access-password">{grant.password}</code>
+        </div>
+        <p className="mt-3 mb-4 text-small text-[var(--color-status-warning)]">{t('ui.hiveComponents.accessShownOnce')}</p>
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="btn-sm btn-secondary" data-testid="hive-access-done">{t('ui.hiveComponents.accessDone')}</button>
+          <button onClick={() => void copyAll()} className="btn-sm btn-primary" data-testid="hive-access-copy-all">
+            {copied ? t('common.copy.copied') : t('ui.hiveComponents.accessCopyAll')}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** Rotate the Host's own machine key: rare (only when it may have leaked), so a text link
+ *  that asks once. Everyone's browser keys keep working. */
+export function HiveRotateKey({ instance: inst, long = false }: { instance: HiveInstance; long?: boolean }) {
+  const { t } = useTranslation();
+  const [state, setState] = useState<'idle' | 'confirm' | 'busy' | 'done'>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const linkBtn = 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:underline disabled:opacity-50';
+  if (inst.status !== 'running') return <span className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessWhenRunning')}</span>;
+  const go = async () => {
+    setState('busy'); setError(null);
+    try { await hiveService.rotateHostKey(inst.id); setState('done'); }
+    catch (e) { setError(friendlyError(e)); setState('confirm'); }
+  };
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+      {state === 'confirm' || state === 'busy' ? (
+        <span className="inline-flex flex-wrap items-center gap-2" data-testid="hive-access-rotate-confirm">
+          <span className="text-[var(--color-text-secondary)]">{t('ui.hiveComponents.rotateHostKeyNote')}</span>
+          <button onClick={() => void go()} disabled={state === 'busy'} className="btn-sm btn-secondary disabled:opacity-50" data-testid="hive-access-rotate-go">
+            {t('ui.hiveComponents.rotateHostKeyGo')}</button>
+          <button onClick={() => setState('idle')} disabled={state === 'busy'} className={linkBtn}>{t('common.button.cancel')}</button>
+        </span>
+      ) : (
+        <>
+          <button onClick={() => { setState('confirm'); setError(null); }} className={linkBtn} data-testid="hive-access-rotate">
+            {long ? t('ui.hiveComponents.rotateHostKey') : t('ui.hiveComponents.rotateHostKeyGo')}</button>
+          <span className="text-[var(--color-text-muted)]">· {t('ui.hiveComponents.rotateHostKeyWhen')}</span>
+          {state === 'done' && <span className="text-[var(--color-status-success)]">{t('ui.hiveComponents.rotateHostKeyDone')}</span>}
+        </>
+      )}
+      {error && <span className="text-[var(--color-status-error)]" data-testid="hive-access-rotate-error">{error}</span>}
+    </span>
+  );
+}
+
 /** The person's decisions about who can sign in to one Hive: give someone access (each
- *  person their own browser key, its password shown ONCE), take it away, and, rarely,
- *  rotate the Host's own machine key. No stored password is ever shown here: the only
- *  password on screen is the one just created, and Done (or leaving) discards it. */
-export function HiveAccess({ instance: inst }: { instance: HiveInstance }) {
+ *  person their own browser key, its password shown ONCE, in a dialog), and take it away.
+ *  The old shared password, while it still works, is the one line that asks for action.
+ *  No stored password is ever shown here: the only password on screen is the one just
+ *  created, and Done (or leaving) discards it. `extras` (the legacy Hive card) also shows
+ *  the address and the Host key rotation, which the Swarm Out settings show under More. */
+export function HiveAccess({ instance: inst, extras = true }: { instance: HiveInstance; extras?: boolean }) {
   const { t } = useTranslation();
   const running = inst.status === 'running';
   const [accesses, setAccesses] = useState<HiveAccessEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [grant, setGrant] = useState<HiveAccessGrant | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
-  const [rotate, setRotate] = useState<'idle' | 'confirm' | 'done'>('idle');
+  // the list itself could not be read (not an action that failed): it says so, with Retry
+  const [listFailed, setListFailed] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const url = inst.cloudfrontDomain
-    ? `https://${inst.cloudfrontDomain}`
-    : inst.ec2PublicIp ? `http://${inst.ec2PublicIp}` : '';
+  const url = hiveUrl(inst);
 
   const reload = async () => {
-    try { setAccesses(await hiveService.listAccess(inst.id)); }
-    catch (e) { setError(friendlyError(e)); }
+    try { setAccesses(await hiveService.listAccess(inst.id)); setListFailed(false); }
+    catch (e) { setError(friendlyError(e)); setListFailed(true); }
   };
 
   useEffect(() => {
@@ -366,19 +456,18 @@ export function HiveAccess({ instance: inst }: { instance: HiveInstance }) {
     let alive = true;
     setAccesses(null);
     hiveService.listAccess(inst.id)
-      .then((rows) => { if (alive) setAccesses(rows); })
-      .catch((e) => { if (alive) setError(friendlyError(e)); });
+      .then((rows) => { if (alive) { setAccesses(rows); setListFailed(false); } })
+      .catch((e) => { if (alive) { setError(friendlyError(e)); setListFailed(true); } });
     return () => { alive = false; };
   }, [inst.id, running]);
 
-  // the one-time password lives only in this panel's state: it goes with Done or unmount
   useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
 
-  const doCopy = async (text: string, what: string) => {
-    if (await copyToClipboard(text)) {
-      setCopied(what);
+  const copyUrl = async () => {
+    if (await copyToClipboard(url)) {
+      setCopied(true);
       if (copyTimer.current) clearTimeout(copyTimer.current);
-      copyTimer.current = setTimeout(() => setCopied(null), 2000);
+      copyTimer.current = setTimeout(() => setCopied(false), 2000);
     }
   };
 
@@ -402,8 +491,6 @@ export function HiveAccess({ instance: inst }: { instance: HiveInstance }) {
     });
   };
 
-  const closeGrant = () => { setGrant(null); setCopied(null); };
-
   const created = (iso: string | null) => {
     if (!iso) return '';
     const d = new Date(iso);
@@ -414,96 +501,98 @@ export function HiveAccess({ instance: inst }: { instance: HiveInstance }) {
 
   if (!running) {
     return (
-      <div className="mt-2 text-xs text-[var(--color-text-muted)]" data-testid="hive-access">
+      <div className="text-small text-[var(--color-text-muted)]" data-testid="hive-access">
         {t('ui.hiveComponents.accessWhenRunning')}
       </div>
     );
   }
 
   const linkBtn = 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50';
+  const legacy = (accesses ?? []).filter((a) => a.legacy);
+  const people = (accesses ?? []).filter((a) => !a.legacy);
+  const revokeConfirm = (user: string, label: string) => (
+    <>
+      <span className="text-[var(--color-text)]">{t('ui.hiveComponents.accessRevokeConfirm', { name: label })}</span>
+      <button onClick={() => void run(async () => { await hiveService.revokeAccess(inst.id, user); setRevoking(null); await reload(); })}
+        disabled={busy} className="btn-sm btn-danger disabled:opacity-50" data-testid="hive-access-revoke-go">
+        {t('ui.hiveComponents.accessRevoke')}
+      </button>
+      <button onClick={() => setRevoking(null)} disabled={busy} className={linkBtn}>{t('common.button.cancel')}</button>
+    </>
+  );
 
   return (
-    <div className="mt-2 p-2 bg-[var(--color-card)] rounded text-xs space-y-2.5" data-testid="hive-access">
-      {/* the address everyone opens */}
-      {url && (
+    <div className="text-small flex flex-col gap-2 min-w-0" data-testid="hive-access">
+      {extras && url && (
         <div className="flex items-center gap-2 min-w-0">
           <code className="text-[var(--color-text)] select-all truncate min-w-0">{url}</code>
-          <button onClick={() => void doCopy(url, 'url')} className="btn-sm btn-secondary shrink-0" data-testid="hive-access-copy-url">
-            {copied === 'url' ? t('common.copy.copied') : t('common.copy.copy')}
+          <button onClick={() => void copyUrl()} className="btn-sm btn-secondary shrink-0" data-testid="hive-access-copy-url">
+            {copied ? t('common.copy.copied') : t('common.copy.copy')}
           </button>
         </div>
       )}
 
-      {/* who can sign in: one browser key per person */}
-      <div className="space-y-1">
-        <div className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessWho')}</div>
-        {accesses === null ? (
-          <div className="text-[var(--color-text-muted)]">...</div>
-        ) : accesses.length === 0 ? (
-          <div className="text-[var(--color-text-muted)]" data-testid="hive-access-empty">{t('ui.hiveComponents.accessNone')}</div>
-        ) : (
-          <ul className="space-y-1" data-testid="hive-access-list">
-            {accesses.map((a) => {
-              const label = a.legacy ? t('ui.hiveComponents.accessLegacy') : a.label || a.user;
-              return (
-                <li key={a.user} className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0" data-testid={`hive-access-row-${a.user}`}>
-                  {revoking === a.user ? (
-                    <>
-                      <span className="text-[var(--color-text)]">{t('ui.hiveComponents.accessRevokeConfirm', { name: label })}</span>
-                      <button onClick={() => void run(async () => { await hiveService.revokeAccess(inst.id, a.user); setRevoking(null); await reload(); })}
-                        disabled={busy} className="btn-sm btn-danger disabled:opacity-50" data-testid="hive-access-revoke-go">
-                        {t('ui.hiveComponents.accessRevoke')}
-                      </button>
-                      <button onClick={() => setRevoking(null)} disabled={busy} className={linkBtn}>{t('common.button.cancel')}</button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-[var(--color-text)] truncate">{label}</span>
-                      {a.legacy
-                        ? <span className="text-yellow-400">{t('ui.hiveComponents.accessLegacyHint')}</span>
-                        : created(a.createdAt) && <span className="text-[var(--color-text-muted)]">{created(a.createdAt)}</span>}
-                      <button onClick={() => setRevoking(a.user)} disabled={busy}
-                        className="ml-auto text-red-400/80 hover:text-red-400 disabled:opacity-50" data-testid={`hive-access-revoke-${a.user}`}>
-                        {t('ui.hiveComponents.accessRevoke')}
-                      </button>
-                    </>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
+      {accesses === null ? (
+        listFailed ? (
+          <div className="text-[var(--color-text-muted)]" data-testid="hive-access-unreadable">
+            {t('ui.hiveComponents.accessUnreadable')}{' '}
+            <button onClick={() => { setListFailed(false); setError(null); void reload(); }} className="text-[var(--color-primary)] hover:underline"
+              data-testid="hive-access-retry">{t('common.button.retry')}</button>
+          </div>
+        ) : <div className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessReading')}</div>
+      ) : (
+        <ul className="m-0 p-0 list-none flex flex-col gap-2" data-testid="hive-access-list">
+          {/* the old shared password: the one thing here that asks for action */}
+          {legacy.map((a) => (
+            <li key={a.user} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-2.5 py-2 rounded-lg min-w-0"
+              style={{ color: 'var(--color-status-warning)', background: 'color-mix(in srgb, var(--color-status-warning) 10%, transparent)' }}
+              data-testid={`hive-access-row-${a.user}`}>
+              {revoking === a.user ? revokeConfirm(a.user, t('ui.hiveComponents.accessLegacy')) : (
+                <>
+                  <span className="flex-1 min-w-0">
+                    <span className="font-semibold">{t('ui.hiveComponents.accessLegacy')}</span>
+                    <span> · {t('ui.hiveComponents.accessLegacyHint')}</span>
+                  </span>
+                  <button onClick={() => setRevoking(a.user)} disabled={busy}
+                    className="btn-sm border disabled:opacity-50"
+                    style={{ borderColor: 'color-mix(in srgb, var(--color-status-warning) 45%, transparent)', color: 'var(--color-status-warning)' }}
+                    data-testid={`hive-access-revoke-${a.user}`}>
+                    {t('ui.hiveComponents.accessLegacyRevoke')}
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+          {people.length === 0 && legacy.length === 0 && (
+            <li className="text-[var(--color-text-muted)]" data-testid="hive-access-empty">{t('ui.hiveComponents.accessNone')}</li>
+          )}
+          {people.map((a) => {
+            const label = a.label || a.user;
+            return (
+              <li key={a.user} className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0" data-testid={`hive-access-row-${a.user}`}>
+                {revoking === a.user ? revokeConfirm(a.user, label) : (
+                  <>
+                    <span className="text-[var(--color-text)] truncate">{label}</span>
+                    {created(a.createdAt) && <span className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessAdded', { date: created(a.createdAt) })}</span>}
+                    <button onClick={() => setRevoking(a.user)} disabled={busy}
+                      className="ml-auto text-[var(--color-status-error)] hover:underline disabled:opacity-50" data-testid={`hive-access-revoke-${a.user}`}>
+                      {t('ui.hiveComponents.accessRevoke')}
+                    </button>
+                  </>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
 
-      {/* the one-time result: the only password this panel ever shows */}
-      {grant ? (
-        <div className="p-2 rounded bg-[var(--color-bg)] space-y-1.5" data-testid="hive-access-grant">
-          <div className="font-medium text-[var(--color-text)]">{t('ui.hiveComponents.accessGrantTitle', { name: grant.user })}</div>
-          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 min-w-0">
-            <span className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessUrl')}</span>
-            <code className="text-[var(--color-text)] select-all break-all">{grant.url || url}</code>
-            <span className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessUser')}</span>
-            <code className="text-[var(--color-text)] select-all">{grant.user}</code>
-            <span className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessPassword')}</span>
-            <code className="text-[var(--color-text)] select-all break-all" data-testid="hive-access-password">{grant.password}</code>
-          </div>
-          <div className="text-yellow-400">{t('ui.hiveComponents.accessShownOnce')}</div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => void doCopy(t('ui.hiveComponents.accessShareText', { url: grant.url || url, user: grant.user, password: grant.password }), 'grant')}
-              className="btn-md btn-soft" data-testid="hive-access-copy-all">
-              <span className="material-symbols-outlined icon-sm">content_copy</span>
-              {copied === 'grant' ? t('common.copy.copied') : t('ui.hiveComponents.accessCopyAll')}
-            </button>
-            <button onClick={closeGrant} className="btn-sm btn-secondary" data-testid="hive-access-done">{t('ui.hiveComponents.accessDone')}</button>
-          </div>
-        </div>
-      ) : adding ? (
-        <div className="space-y-1">
+      {adding ? (
+        <div className="flex flex-col gap-1 max-w-[420px]">
           <div className="flex items-center gap-2">
             <input autoFocus value={name} onChange={(e) => setName(e.target.value.toLowerCase())} maxLength={32}
               onKeyDown={(e) => { if (e.key === 'Enter') submitAdd(); if (e.key === 'Escape') { setAdding(false); setName(''); } }}
               placeholder={t('ui.hiveComponents.accessNamePlaceholder')} aria-label={t('ui.hiveComponents.accessNamePlaceholder')}
-              className="flex-1 min-w-0 px-2 py-1 bg-[var(--color-bg)] border border-[var(--color-border)] rounded text-xs text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
+              className="flex-1 min-w-0 px-2 py-1 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-md text-small text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
               data-testid="hive-access-name" />
             <button onClick={submitAdd} disabled={busy || !name.trim()} className="btn-sm btn-primary disabled:opacity-50" data-testid="hive-access-create">
               {busy ? '...' : t('ui.hiveComponents.accessCreate')}
@@ -513,37 +602,24 @@ export function HiveAccess({ instance: inst }: { instance: HiveInstance }) {
           <div className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.accessNameHint')}</div>
         </div>
       ) : (
-        <button onClick={() => { setAdding(true); setError(null); }} disabled={busy} className="btn-md btn-soft disabled:opacity-50" data-testid="hive-access-add">
-          <span className="material-symbols-outlined icon-sm">person_add</span>
-          {t('ui.hiveComponents.accessAdd')}
-        </button>
+        <div>
+          <button onClick={() => { setAdding(true); setError(null); }} disabled={busy || accesses === null}
+            className="btn-sm border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50" data-testid="hive-access-add">
+            + {t('ui.hiveComponents.accessAdd')}
+          </button>
+        </div>
       )}
 
       {error && (
-        <p className="text-red-400 bg-red-500/10 px-2 py-1 rounded flex items-center justify-between" data-testid="hive-access-error">
-          <span>{error}</span>
-          <button onClick={() => setError(null)} className="text-red-400/60 hover:text-red-400 ml-2">✕</button>
+        <p className="m-0 text-[var(--color-status-error)] flex items-center justify-between gap-2" data-testid="hive-access-error">
+          <span className="min-w-0 break-words">{error}</span>
+          <button onClick={() => setError(null)} className="opacity-60 hover:opacity-100" aria-label={t('swarmOut.setup.dismiss')}>✕</button>
         </p>
       )}
 
-      {/* rare: the Host's own machine key, never shown */}
-      {rotate === 'confirm' ? (
-        <div className="flex flex-wrap items-center gap-2" data-testid="hive-access-rotate-confirm">
-          <span className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.rotateHostKeyNote')}</span>
-          <button onClick={() => void run(async () => { await hiveService.rotateHostKey(inst.id); setRotate('done'); })}
-            disabled={busy} className="btn-sm btn-secondary disabled:opacity-50" data-testid="hive-access-rotate-go">
-            {t('ui.hiveComponents.rotateHostKeyGo')}
-          </button>
-          <button onClick={() => setRotate('idle')} disabled={busy} className={linkBtn}>{t('common.button.cancel')}</button>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2">
-          <button onClick={() => { setRotate('confirm'); setError(null); }} disabled={busy} className={`${linkBtn} text-[11px]`} data-testid="hive-access-rotate">
-            {t('ui.hiveComponents.rotateHostKey')}
-          </button>
-          {rotate === 'done' && <span className="text-green-400 text-[11px]">{t('ui.hiveComponents.rotateHostKeyDone')}</span>}
-        </div>
-      )}
+      {extras && <div className="text-[11px]"><HiveRotateKey instance={inst} long /></div>}
+
+      {grant && <AccessGrantDialog grant={grant} url={url} onClose={() => setGrant(null)} />}
     </div>
   );
 }

@@ -55,7 +55,8 @@ const TONE = {
   muted: 'text-[var(--color-text-muted)]',
 };
 
-export function HiveBrains({ instanceId }: { instanceId: string }) {
+/** `bare`: the caller already labels this line "Brains" (the Swarm Out settings' field grid). */
+export function HiveBrains({ instanceId, bare = false }: { instanceId: string; bare?: boolean }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const key = ['hive', 'brains', instanceId];
@@ -124,9 +125,9 @@ export function HiveBrains({ instanceId }: { instanceId: string }) {
   }
 
   return (
-    <div className="mt-2 text-xs" data-testid="hive-brains">
-      <div className="flex items-center gap-2">
-        <span className="text-[var(--color-text-muted)]">{t('ui.HiveBrains.brainsLabel')}</span>
+    <div className={bare ? 'text-small' : 'mt-2 text-xs'} data-testid="hive-brains">
+      <div className="flex flex-wrap items-center gap-2">
+        {!bare && <span className="text-[var(--color-text-muted)]">{t('ui.HiveBrains.brainsLabel')}</span>}
         {summary}
         <span className="flex-1" />
         {busy === '*' && <span className="text-[var(--color-text-muted)]">{t('ui.HiveBrains.syncingDefaults')}</span>}
