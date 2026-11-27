@@ -20,10 +20,16 @@ NOT_NEEDED = "not_needed"              # a running Hive with room can take the t
 RUNNING_NOT_FULL = "running_not_full"  # a running Hive is unusable for a reason other than full
 
 
+#: placement order of the tiers: Elastic Workers first (each run gets its own microVM, and
+#: runs dispatched together never crowd one machine), then a running Hive or SSH machine with
+#: room, then a stopped EC2 Hive (XG 2026-11-27, replacing D4's warm-first order)
+_RANK = {TIER_ELASTIC: 0, TIER_WARM: 1, TIER_COLD: 2}
+
+
 def _order(o: Offer) -> tuple:
     # load_key ends with the name; carrier and id break a tie between equal names so the
     # order never depends on the input order
-    return (o.tier, o.load_key(), o.carrier, o.location_id)
+    return (_RANK[o.tier], o.load_key(), o.carrier, o.location_id)
 
 
 def _busy(o: Offer) -> int:
@@ -67,13 +73,12 @@ def _filtered(needs: Needs, o: Offer) -> Optional[str]:
 
 def place(needs: Needs, offers: list[Offer]) -> Placement:
     """Filter (private reach, Brain lock by machine, a named location, a blocked offer), then
-    order by tier (warm EC2 with room, elastic, stopped EC2) and within a tier by
+    order by tier (elastic, a running Hive with room, stopped EC2) and within a tier by
     ``Offer.load_key``. A stopped EC2 Hive is a candidate only when no running EC2 Hive can
     take the task and either none was offered or every blocked one was left out as
     saturated or as reading an older features schema than this task's repo (a stopped Hive is
-    updated to the Host's build when it starts), not out of date or unreachable (D5); with an
-    elastic offer it comes after it,
-    as the failover when the elastic runtime is throttled. A named location is taken in
+    updated to the Host's build when it starts), not out of date or unreachable (D5); it always
+    comes after an elastic offer, as the failover when the elastic runtime is throttled. A named location is taken in
     whatever tier it is. ``skipped``: (name, reason) of every offer left out, by name."""
     skipped: list[tuple[str, str]] = []
     usable: list[Offer] = []

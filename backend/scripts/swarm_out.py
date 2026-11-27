@@ -4,7 +4,8 @@ Calls the local daemon's /api/swarm-out routes on loopback; Hive credentials sta
 inside the daemon. Used by the agent of the person's own session (desktop, or their own
 channel DM): a non-owner channel session is refused (``knowledge_cli.RESTRICTED_ENV``,
 and the Bash permission handler denies the command there too). Without ``--hive`` the
-daemon picks the least busy running Hive. A dispatch's result is shown as a card the
+daemon places it (core/carriers/placement: Elastic Workers first, then the least busy
+running Hive, then a stopped one). A dispatch's result is shown as a card the
 backend builds from the dispatch log (core/swarm_out_card).
 
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out hives

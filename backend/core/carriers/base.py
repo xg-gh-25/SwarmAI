@@ -34,9 +34,10 @@ AGENTCORE = "agentcore"
 SSH = "ssh"
 KINDS = (EC2, AGENTCORE, SSH)
 
-#: offer tiers, in placement order (design §4.4 step 2)
-TIER_WARM = 1        # a running EC2 Hive with room: starts now, already paid for
-TIER_ELASTIC = 2     # Elastic Workers (AgentCore): cold start plus transfer
+#: offer tiers (the ids a placement records as its layer; the order placement tries them in
+#: is core/carriers/placement._RANK: elastic, warm, cold)
+TIER_WARM = 1        # a running Hive or SSH machine with room: starts now, already paid for
+TIER_ELASTIC = 2     # Elastic Workers (AgentCore): cold start plus transfer, one microVM per run
 TIER_COLD = 3        # a stopped EC2 Hive: up to START_TIMEOUT_S to start, then runs to idle stop
 
 #: placement reasons the run card words (core/swarm_out_card, the desktop card)

@@ -85,11 +85,11 @@ def test_place_does_no_io(monkeypatch):
     monkeypatch.setattr(socket, "socket", refuse)
     monkeypatch.setattr(socket, "create_connection", refuse)
     p = place(Needs(held=frozenset({"w9"})), [warm("w1"), elastic(), cold("c1")])
-    assert p.offer.name == "w1"
+    assert p.offer.name == "elastic"
 
 
 def test_failover_records_where_the_run_was_opened():
-    p = place(Needs(), [warm("w1"), warm("w2", open_runs=1), elastic()])
+    p = place(Needs(), [warm("w1"), warm("w2", open_runs=1), elastic(blocked="at_quota")])
 
     async def first_full(o):
         if o.name == "w1":
@@ -98,7 +98,7 @@ def test_failover_records_where_the_run_was_opened():
     handle, done = asyncio.run(open_with_failover(p, first_full, lambda: 400.0))
     assert handle.location_id == "id-w2"
     assert done.offer.name == "w2" and done.layer == TIER_WARM and done.reason == "least_busy:1"
-    assert [o.name for o in done.candidates] == ["elastic"]
+    assert done.candidates == ()
     assert done.record()["location"] == "w2" and done.record()["tried"] == [["w1", "saturated"]]
     only_cold = place(Needs(), [cold("c1")])
     handle, same = asyncio.run(open_with_failover(only_cold, lambda o: _ok(o), lambda: 0.0))
@@ -119,10 +119,10 @@ def test_refusal_carries_tried_and_passes_over_a_slow_candidate():
         raise LocationUnavailable("busy")
     with pytest.raises(LocationUnavailable) as e:
         asyncio.run(open_with_failover(p, unavailable, lambda: 100.0))
-    assert seen == ["w1", "elastic"]                            # w2 does not fit, elastic still does
+    assert seen == ["elastic", "w1"]                            # w2 does not fit, w1 still does
     msg = str(e.value)
-    assert "w1: busy" in msg and "elastic: busy" in msg and "w2: not tried" in msg
-    assert e.value.placement.tried == (("w1", "busy"), ("elastic", "busy"))
+    assert "elastic: busy" in msg and "w1: busy" in msg and "w2: not tried" in msg
+    assert e.value.placement.tried == (("elastic", "busy"), ("w1", "busy"))
 
 
 def test_nothing_to_open_raises_with_every_skipped_reason():

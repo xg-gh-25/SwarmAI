@@ -28,8 +28,10 @@ def test_place_is_deterministic_and_orders_tiers():
     offers = [cold("c1"), elastic(), warm("w2", open_runs=1), warm("w1")]
     a, b = place(Needs(), list(offers)), place(Needs(), list(reversed(offers)))
     assert a == b
-    assert a.offer.name == "w1" and a.layer == TIER_WARM
-    assert [o.name for o in a.candidates] == ["w2", "elastic"]          # cold not a candidate: warm has room
+    assert a.offer.name == "elastic" and a.layer == TIER_ELASTIC and a.reason == "elastic"
+    assert [o.name for o in a.candidates] == ["w1", "w2"]               # cold not a candidate: warm has room
+    no_elastic = place(Needs(), [cold("c1"), warm("w2", open_runs=1), warm("w1")])
+    assert no_elastic.offer.name == "w1" and no_elastic.layer == TIER_WARM
     no_warm = place(Needs(), [cold("c1"), elastic()])
     assert no_warm.offer.name == "elastic" and no_warm.reason == "elastic"
 
@@ -77,12 +79,12 @@ def test_failover_only_before_write():
 
     async def unavailable_then_ok(o):
         seen.append(o.name)
-        if o.name == "w1":
-            raise LocationUnavailable("saturated")
+        if o.name == "elastic":
+            raise LocationUnavailable("throttled")
         return _handle(o)
     handle, done = asyncio.run(open_with_failover(p, unavailable_then_ok, lambda: 400.0))
-    assert handle.carrier == AGENTCORE and seen == ["w1", "elastic"]
-    assert done.tried == (("w1", "saturated"),)
+    assert handle.carrier == EC2 and seen == ["elastic", "w1"]
+    assert done.tried == (("elastic", "throttled"),)
 
     async def write_failed(o):
         seen.append(o.name)
@@ -90,7 +92,7 @@ def test_failover_only_before_write():
     seen.clear()
     with pytest.raises(RuntimeError):
         asyncio.run(open_with_failover(p, write_failed, lambda: 400.0))
-    assert seen == ["w1"]                                               # no failover after a write
+    assert seen == ["elastic"]                                          # no failover after a write
 
 
 def test_failover_respects_the_deadline_and_names_everyone():
