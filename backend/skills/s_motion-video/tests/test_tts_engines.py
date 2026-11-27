@@ -24,6 +24,13 @@ sys.path.insert(0, os.path.join(SKILL, "scripts"))
 import tts  # noqa: E402
 
 HAS_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+
+
+@pytest.fixture(autouse=True)
+def _no_swarmai_profile(monkeypatch, request):
+    """These tests stub AWS themselves: never pick up the real SwarmAI profile of the machine running them."""
+    if not request.node.name.startswith("test_polly_uses_the_swarmai_account"):
+        monkeypatch.setattr(tts, "swarmai_profile_file", lambda: None)
 needs_ffmpeg = pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg/ffprobe not installed")
 
 
@@ -401,3 +408,25 @@ def test_a_named_engine_does_not_fall_back(tmp_path, monkeypatch):
     assert asyncio.run(tts.run(_ns(proj, "edge"))) == 2
     sb = json.load(open(os.path.join(proj, "storyboard.json"), encoding="utf-8"))
     assert sb["voice"] == {"name": "zh-CN-YunxiNeural"}
+
+
+
+def test_polly_uses_the_swarmai_account_not_the_persons_own_aws(tmp_path, monkeypatch):
+    """Voice is a SwarmAI feature: with SwarmAI's profile present, Polly's credentials come from it (the daemon's
+    pinned account), even when the shell has other AWS keys or profiles."""
+    pytest.importorskip("boto3")
+    proc = tmp_path / "creds.py"
+    proc.write_text('import json; print(json.dumps({"Version": 1, "AccessKeyId": "AKIASWARMAIPINNED", '
+                    '"SecretAccessKey": "s", "SessionToken": "t"}))\n')
+    cfg = tmp_path / "config"
+    cfg.write_text(f'[profile swarmai]\ncredential_process = "{sys.executable}" "{proc}"\nregion = us-west-2\n')
+    monkeypatch.setattr(tts, "swarmai_profile_file", lambda: cfg)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAPERSONSOWN")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "x")
+    monkeypatch.setenv("AWS_PROFILE", "someone-elses")
+    sess = tts.aws_session()
+    assert sess.get_credentials().get_frozen_credentials().access_key == "AKIASWARMAIPINNED"
+    assert sess.region_name in ("us-west-2", os.environ.get("AWS_DEFAULT_REGION"), os.environ.get("AWS_REGION"))
+    monkeypatch.setattr(tts, "swarmai_profile_file", lambda: None)   # a plain python3 outside SwarmAI: the standard chain
+    monkeypatch.delenv("AWS_PROFILE")
+    assert tts.aws_session().get_credentials().get_frozen_credentials().access_key == "AKIAPERSONSOWN"

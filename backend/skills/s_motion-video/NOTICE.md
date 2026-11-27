@@ -65,7 +65,7 @@ the online text-to-speech service that Microsoft Edge's Read Aloud uses. What is
   Polly instead. Anyone publishing a film, or shipping this skill in a paid product, should voice it with
   Polly (`--engine polly`) or Azure AI Speech.
 
-**Amazon Polly** (https://aws.amazon.com/polly/) is called through boto3 with the person's own AWS credentials
+**Amazon Polly** (https://aws.amazon.com/polly/) is called through boto3 on the AWS account set in SwarmAI's Settings (the same account as its Bedrock)
 and is billed to their account per character (two requests per scene: audio and word speech marks). Under the
 AWS Service Terms (https://aws.amazon.com/service-terms/, section 50 "AI Services") the generated audio is the
 customer's content, and AWS may use the submitted text to improve the service unless the account opts out

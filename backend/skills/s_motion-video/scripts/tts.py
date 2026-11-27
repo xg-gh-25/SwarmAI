@@ -11,7 +11,8 @@ and writes scene.duration = max(voice + 0.4, 2.0), rounded UP to a whole frame, 
 
 Engines (same outputs, same rules):
   edge   edge-tts, the Microsoft Edge read-aloud endpoint (unofficial; see NOTICE.md); word boundaries from the stream.
-  polly  Amazon Polly neural voices through boto3 (standard AWS credential chain and region); word timings from
+  polly  Amazon Polly neural voices through boto3 on the AWS account set in SwarmAI's Settings (its `swarmai`
+         profile; a plain python3 outside SwarmAI uses the standard chain); word timings from
          speech marks of type "word" (a word ends where the next starts, the last at the end of speech).
 Which one: --engine edge|polly, else storyboard voice.engine, else the engine voice.name belongs to (a hyphenated
 name such as zh-CN-YunxiNeural is an edge-tts voice, a single word such as Zhiyu is a Polly voice), else auto:
@@ -516,13 +517,40 @@ async def voice_scene(job, sem):
 
 # ---------- Amazon Polly ----------
 
-def polly_client(region=None):
-    """A Polly client from boto3's standard credential chain and region configuration."""
+def swarmai_profile_file():
+    """SwarmAI's own AWS profile file when this runs under SwarmAI's Python, else None. Voice is a SwarmAI
+    feature, so it uses the one AWS account set in SwarmAI's Settings: the daemon writes a `swarmai` profile
+    whose credential_process asks the daemon for that account's pinned credentials (core/aws_account,
+    design docs/design/2026-10-31-swarmai-aws-account.md section 5.3). The person's own ~/.aws profiles are
+    never used for it."""
+    try:
+        from core import aws_account
+        path = aws_account.profile_file()
+    except Exception:   # noqa: BLE001  (not SwarmAI's Python, or no data dir)
+        return None
+    return path if path.is_file() else None
+
+
+def aws_session():
+    """The boto3 session for Polly: SwarmAI's account (Settings) through its `swarmai` profile when SwarmAI runs
+    this; the standard credential chain only for a plain python3 outside SwarmAI."""
     try:
         import boto3
+        import botocore.session
     except ImportError:
         raise EnvError(BOTO3_MISSING)
-    sess = boto3.Session()
+    cfg = swarmai_profile_file()
+    if cfg is None:
+        return boto3.Session()
+    bs = botocore.session.Session()
+    bs.set_config_variable("config_file", str(cfg))
+    bs.set_config_variable("credentials_file", os.devnull)   # only the swarmai profile, never ~/.aws keys
+    return boto3.Session(botocore_session=bs, profile_name="swarmai")
+
+
+def polly_client(region=None):
+    """A Polly client on SwarmAI's AWS account (aws_session)."""
+    sess = aws_session()
     region = region or sess.region_name
     if not region:
         raise EnvError("no AWS region configured for Polly: set AWS_REGION, or region in the AWS config file (aws configure)")
@@ -537,8 +565,10 @@ def polly_error(e, voice):
     msg = (str(e).splitlines() or [name])[0][:300]
     if name in ("NoCredentialsError", "PartialCredentialsError", "SSOTokenLoadError", "UnauthorizedSSOTokenError",
                 "TokenRetrievalError", "CredentialRetrievalError"):
-        return EnvError(f"no usable AWS credentials for Polly ({name}): configure the standard AWS chain "
-                        f"(environment, AWS config files, SSO login or an instance role), or use --engine edge")
+        where = ("SwarmAI's AWS account (Settings) gave no credentials: sign in again there, and check that SwarmAI is "
+                 "running" if swarmai_profile_file() else "configure the standard AWS chain (environment, AWS config files, "
+                 "SSO login or an instance role)")
+        return EnvError(f"no usable AWS credentials for Polly ({name}): {where}, or use --engine edge")
     if code in ("AccessDeniedException", "AccessDenied", "UnrecognizedClientException", "ExpiredTokenException"):
         return EnvError(f"Polly refused the request ({code}): the AWS identity needs polly:SynthesizeSpeech "
                         f"with valid credentials, or use --engine edge")
@@ -551,18 +581,18 @@ def polly_probe(lang):
     if not voice:
         return False, f"no default Polly voice for lang {lang}"
     try:
-        import boto3
+        import boto3  # noqa: F401
     except ImportError:
         return False, "boto3 is not available in this Python"
     try:
-        sess = boto3.Session()
+        sess = aws_session()
         if sess.get_credentials() is None:
             return False, "no AWS credentials found"
         if not sess.region_name:
             return False, "no AWS region configured"
         polly_client(sess.region_name).synthesize_speech(Engine="neural", VoiceId=voice, OutputFormat="json",
                                                           SpeechMarkTypes=["sentence"], Text="ok")
-        return True, f"AWS credentials work for Polly in {sess.region_name}"
+        return True, f"the AWS account works for Polly in {sess.region_name}"
     except EnvError as e:
         return False, f"Polly not usable ({str(e)[:200]})"
     except Exception as e:   # noqa: BLE001  (any failure means: not usable here; the reason is printed)
@@ -792,7 +822,7 @@ def main():
     ap.add_argument("--scene", help="only this scene id, e.g. S03")
     ap.add_argument("--engine", choices=ENGINES + ("auto",),
                     help="edge | polly | auto (default: storyboard voice.engine, else the engine of voice.name, else auto: "
-                         "Polly when AWS credentials work for it, else edge)")
+                         "Polly when SwarmAI's AWS account works for it, else edge)")
     ap.add_argument("--force", action="store_true", help="re-synthesize even when narration and voice are unchanged")
     ap.add_argument("--list-voices", nargs="?", const="all", metavar="LANG", help="print recommended voices (zh, en or all) and exit")
     a = ap.parse_args()

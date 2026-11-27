@@ -41,13 +41,14 @@ around it.
 marks); both give the same files, timings and duration rule. Without `--engine`, the engine is the one the
 storyboard's voice name belongs to (`zh-CN-YunxiNeural` is edge-tts, `Zhiyu` / `Matthew` are Polly), so an
 existing film never changes voice. **Default for a new film:** a Chinese film speaks with edge-tts's Yunxi;
-another language takes Polly when the person's AWS credentials work for it, else edge-tts. Voice a new film the
+another language takes Polly when SwarmAI's AWS account (Settings) can use it, else edge-tts. Voice a new film the
 first time with `tts.py --project "$P" --engine auto`; it says which engine and why and writes the voice into
 `storyboard.json`, so later runs need no flag. **When edge-tts fails** (its endpoint rejects the client, the
 network is down, it is not installed) and no `--engine` was given, the whole film is voiced again with Polly's
 default voice for its language, never only the failed scenes, and the storyboard records the Polly voice; say
 so to the person. edge-tts uses an unofficial endpoint whose terms do not cover third-party clients (NOTICE.md),
-which is why Polly, an official service on the person's own AWS account, is the fallback.
+which is why Polly, an official service on SwarmAI's AWS account (the one set in Settings, used for every
+SwarmAI feature; the person's own `~/.aws` profiles are never used for it), is the fallback.
 
 **Fonts.** Every style resolves on every OS: macOS families first, then the open-licence fonts bundled in
 `references/styles/fonts/` (CJK sans, serif and Kai included), which is what Windows and Linux render.
