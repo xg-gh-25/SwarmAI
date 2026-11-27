@@ -27,7 +27,7 @@ Alternatives (pick per film from the subject, keep the pair): cyan/amber 188/38 
 
 ## Type
 
-- UI face (names, values, labels, details): `"Avenir Next Condensed", "DIN Alternate", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif` (stand-in for a squared condensed technical face). Mono (frame text, indices, codes, telemetry): `"SF Mono", Menlo, "PingFang SC", monospace`.
+- UI face (names, values, labels, details): `"Avenir Next Condensed", "DIN Alternate", "Helvetica Neue", "MV Roboto Condensed", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif` (stand-in for a squared condensed technical face). Mono (frame text, indices, codes, telemetry): `"SF Mono", Menlo, "MV Noto Sans Mono", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", monospace`.
 - All caps for names, labels, codes, HUD text; sentence case only for details and taglines.
 
 | Role | Size u | Weight / details |

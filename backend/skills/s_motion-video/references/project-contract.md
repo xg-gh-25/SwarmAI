@@ -1,7 +1,7 @@
 # Project contract (the files every script and every doc agree on)
 
 One video = one project directory. Default location:
-`~/.swarm-ai/SwarmWS/Services/motion-video/projects/<yyyy-mm-dd>-<slug>/`.
+`${SWARM_WORKSPACE:-$HOME/.swarm-ai/SwarmWS}/Services/motion-video/projects/<yyyy-mm-dd>-<slug>/`.
 Every script takes `--project <dir>` and reads/writes only inside it.
 
 ```

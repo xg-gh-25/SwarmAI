@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""tts.py: narration for every scene with edge-tts, word timings, caption lines, and scene durations.
+"""tts.py: narration for every scene (edge-tts or Amazon Polly), word timings, caption lines, and scene durations.
 
 For each scene with narration:
-  audio/voice/<id>.mp3            the voice (edge-tts, storyboard voice.name / voice.rate)
+  audio/voice/<id>.mp3            the voice (storyboard voice.name / voice.rate, engine below)
   audio/voice/<id>.words.json     [{"text","start","end"}] seconds from scene start (original spelling, markup stripped)
   audio/voice/<id>.captions.json  [{"text","start","end"}] lines break at punctuation or 16 full-width chars
                                   (12 when height > width); a line lasts until the next one starts
-  audio/voice/<id>.tts.json       cache: hash of (text, spoken text, voice, rate), raw boundaries, measured length
+  audio/voice/<id>.tts.json       cache: hash of (engine, text, spoken text, voice, rate), raw boundaries, measured length
 and writes scene.duration = max(voice + 0.4, 2.0), rounded UP to a whole frame, back into storyboard.json.
+
+Engines (same outputs, same rules):
+  edge   edge-tts, the Microsoft Edge read-aloud endpoint (unofficial; see NOTICE.md); word boundaries from the stream.
+  polly  Amazon Polly neural voices through boto3 (standard AWS credential chain and region); word timings from
+         speech marks of type "word" (a word ends where the next starts, the last at the end of speech).
+Which one: --engine edge|polly, else storyboard voice.engine, else the engine voice.name belongs to (a hyphenated
+name such as zh-CN-YunxiNeural is an edge-tts voice, a single word such as Zhiyu is a Polly voice), else auto:
+Polly when AWS credentials, a region and one small Polly request succeed, else edge (printed with the reason).
+--engine auto forces that choice. When the chosen engine does not own voice.name, the engine's default voice for
+storyboard.lang is used and written back to storyboard.json, so later runs stay on the same engine.
 
 Width unit for captions: a CJK / full-width character counts 1, any other character 0.5, so the
 16 / 12 limit means the same visual width for Chinese and English lines.
@@ -19,7 +29,8 @@ If a voice returns no word boundaries, the script re-synthesizes with sentence b
 sentence span over its characters proportionally (it says so in the output).
 
 Exit codes: 0 ok, 1 check failed (narration longer than target_seconds by > 20 %), 2 usage / environment
-error (missing storyboard, ffprobe, edge-tts, network, synthesis failure).
+error (missing storyboard, ffmpeg/ffprobe, edge-tts or boto3, credentials, network, synthesis failure); every
+environment error is one line that names what is missing and how to get it.
 """
 import argparse
 import asyncio
@@ -44,7 +55,14 @@ TAIL_KEEP = 0.12          # silence kept after the last spoken sound
 CJK = "⺀-鿿豈-﫿぀-ヿ가-힯"
 PUNCT = set("，。！？；：、,.!?;:…—")
 EDGE_PUNCT = "，。！？；：、,.!?;:…—\"'“”‘’「」『』（）()《》<>[]【】 \t\n"
-DEFAULT_VOICE = {"zh": "zh-CN-YunxiNeural", "en": "en-US-AndrewNeural"}
+DEFAULT_VOICE = {"zh": "zh-CN-YunxiNeural", "en": "en-US-AndrewNeural"}          # edge-tts
+ENGINES = ("edge", "polly")
+SCENE_ID = re.compile(r"[A-Za-z0-9_-]+")
+POLLY_DEFAULT_VOICE = {"zh": "Zhiyu", "en-GB": "Amy", "en": "Matthew"}           # most specific language first
+POLLY_MAX_CHARS = 3000    # Polly neural: billed characters per request
+POLLY_RATE = (20, 200)    # Polly prosody rate range, percent of normal
+FFMPEG_HINT = ("install ffmpeg, which includes ffprobe (macOS: brew install ffmpeg; Windows: winget install Gyan.FFmpeg; "
+               "Linux: the distribution's ffmpeg package, e.g. apt install ffmpeg)")
 
 VOICES = [
     ("zh", "zh-CN-YunxiNeural", "male", "young, lively, clear; default for zh explainers"),
@@ -57,6 +75,18 @@ VOICES = [
     ("en", "en-US-BrianNeural", "male", "casual, approachable; tutorials"),
     ("en", "en-US-EmmaNeural", "female", "cheerful, clear; ads"),
     ("en", "en-GB-RyanNeural", "male", "British, calm; documentary tone"),
+]
+
+# Amazon Polly neural voices (any other Polly neural voice id also works: aws polly describe-voices --engine neural)
+POLLY_VOICES = [
+    ("zh", "Zhiyu", "female", "Mandarin (cmn-CN), warm and clear; default for zh"),
+    ("en", "Matthew", "male", "warm, confident; default for en explainers"),
+    ("en", "Ruth", "female", "natural, conversational; product stories"),
+    ("en", "Stephen", "male", "calm, steady; tutorials"),
+    ("en", "Joanna", "female", "clear, friendly; ads"),
+    ("en", "Danielle", "female", "bright, expressive; consumer ads"),
+    ("en", "Gregory", "male", "deep, measured; corporate briefs"),
+    ("en", "Amy", "female", "British (en-GB), crisp; default for en-GB"),
 ]
 
 # Markup that must never be spoken or shown: TTS control tags, inline pinyin, html/xml tags, markdown emphasis.
@@ -236,8 +266,106 @@ def captions_from_words(text, words, duration, max_width):
     return out
 
 
-def tts_hash(text, spoken, voice, rate):
-    return hashlib.sha256(json.dumps([CACHE_VERSION, text, spoken, voice, rate], ensure_ascii=False).encode()).hexdigest()[:16]
+def tts_hash(text, spoken, voice, rate, engine="edge"):
+    """Cache key. The engine is part of it; edge keeps the payload it always had, so existing edge caches stay valid."""
+    payload = [CACHE_VERSION, text, spoken, voice, rate]
+    if engine != "edge":
+        payload = [CACHE_VERSION, engine, text, spoken, voice, rate]
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()[:16]
+
+
+def voice_engine(name):
+    """The engine a voice name belongs to: edge-tts names carry a locale prefix (zh-CN-YunxiNeural), Polly ids do not."""
+    return "edge" if "-" in str(name) else "polly"
+
+
+def _engine_of(name):
+    return "an edge-tts" if voice_engine(name) == "edge" else "a Polly"
+
+
+def default_voice(engine, lang):
+    lang = str(lang or "zh-CN")
+    if engine == "edge":
+        return DEFAULT_VOICE["zh" if lang.startswith("zh") else "en"]
+    for key, name in POLLY_DEFAULT_VOICE.items():
+        if lang == key or lang.startswith(key):
+            return name
+    return None
+
+
+def resolve_engine(flag, vcfg, probe):
+    """-> (engine, reason). flag: None, "auto", "edge" or "polly"; vcfg: storyboard voice; probe() -> (ok, why)."""
+    if flag in ENGINES:
+        return flag, f"--engine {flag}"
+    if flag != "auto":
+        cfg = vcfg.get("engine")
+        if cfg is not None:
+            if cfg not in ENGINES:
+                raise UsageError(f"voice.engine must be one of {', '.join(ENGINES)}, got {cfg!r}")
+            return cfg, "storyboard voice.engine"
+        name = vcfg.get("name")
+        if name:
+            return voice_engine(name), f"voice.name {name} is {_engine_of(name)} voice"
+    ok, why = probe()
+    return ("polly" if ok else "edge"), f"auto: {why}"
+
+
+def pick_voice(engine, vcfg, lang, flag):
+    """-> (voice name, changed). Keeps voice.name when the engine owns it; otherwise the engine's default for lang.
+    A storyboard whose voice.engine contradicts its voice.name (and no --engine) is a usage error."""
+    name = vcfg.get("name")
+    if name and voice_engine(name) == engine:
+        return str(name), False
+    if name and flag is None and vcfg.get("engine") is not None:
+        raise UsageError(f"voice.engine is {engine} but voice.name {name} is {_engine_of(name)} voice: set voice.name to "
+                         f"a {engine} voice (tts.py --list-voices --engine {engine}) or drop voice.engine")
+    d = default_voice(engine, lang)
+    if not d:
+        raise UsageError(f"no default Polly voice for lang {lang}: set voice.name to a Polly neural voice id "
+                         f"(aws polly describe-voices --engine neural)")
+    return d, True
+
+
+def xml_escape(t):
+    return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+LATIN_WORD = re.compile(r"[A-Za-z][A-Za-z0-9.'\-]*[A-Za-z0-9]")
+
+
+def polly_ssml(text, rate, lang):
+    """Narration -> Polly SSML. Every piece of text is XML-escaped (narration can never inject tags); in Chinese
+    narration, Latin words of 2+ characters are wrapped in <lang xml:lang="en-US"> so they are read as English; a
+    rate other than +0% becomes <prosody rate="N%"> (N = 100 + offset, kept within Polly's 20..200)."""
+    parts, pos = [], 0
+    if str(lang).startswith("zh"):
+        for m in LATIN_WORD.finditer(text):
+            parts.append(xml_escape(text[pos:m.start()]))
+            parts.append(f'<lang xml:lang="en-US">{xml_escape(m.group(0))}</lang>')
+            pos = m.end()
+    parts.append(xml_escape(text[pos:]))
+    body = "".join(parts)
+    if rate and rate != "+0%":
+        pct = min(max(100 + int(rate[:-1]), POLLY_RATE[0]), POLLY_RATE[1])
+        body = f'<prosody rate="{pct}%">{body}</prosody>'
+    return f"<speak>{body}</speak>"
+
+
+def polly_boundaries(marks, speech_end):
+    """Polly speech marks (type "word": time in ms, value) -> [{"text","start","end"}] like edge word boundaries.
+    A word ends where the next word starts; the last ends at speech_end (seconds)."""
+    words = []
+    for m in marks:
+        if m.get("type") != "word":
+            continue
+        v = re.sub(r"<[^>]+>", "", str(m.get("value") or "")).strip()
+        if v:
+            words.append((v, float(m.get("time") or 0) / 1000.0))
+    out = []
+    for i, (v, st) in enumerate(words):
+        end = words[i + 1][1] if i + 1 < len(words) else max(float(speech_end), st)
+        out.append({"text": v, "start": round(st, 3), "end": round(max(end, st), 3)})
+    return out
 
 
 def length_check(narration_total, target):
@@ -258,7 +386,7 @@ def length_check(narration_total, target):
 def tool(name):
     p = shutil.which(name) or (os.path.join("/opt/homebrew/bin", name) if os.path.isfile(os.path.join("/opt/homebrew/bin", name)) else None)
     if not p:
-        die(f"{name} not found on PATH (brew install ffmpeg)")
+        die(f"{name} not found on PATH: {FFMPEG_HINT}")
     return p
 
 
@@ -316,11 +444,29 @@ class EnvError(Exception):
     pass
 
 
+class UsageError(Exception):
+    pass
+
+
+EDGE_MISSING = ("edge-tts is not installed in this Python (SwarmAI's bundled Python does not carry it): use --engine polly "
+                "with AWS credentials, or run tts.py with a Python that has it (python3 -m pip install -U edge-tts)")
+BOTO3_MISSING = ("boto3 is not installed in this Python: run tts.py with SwarmAI's Python (\"$SWARM_BACKEND_BIN\" py), "
+                 "which carries it, or python3 -m pip install boto3")
+
+
+def edge_available():
+    try:
+        import edge_tts  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 async def synth(text, voice, rate, mp3, boundary):
     try:
         import edge_tts
     except ImportError:
-        raise EnvError("edge-tts is not installed (python3 -m pip install -U edge-tts)")
+        raise EnvError(EDGE_MISSING)
     try:
         comm = edge_tts.Communicate(text, voice, rate=rate, boundary=boundary)
     except TypeError:   # edge-tts < 7 has no boundary argument (word boundaries only)
@@ -361,6 +507,90 @@ async def voice_scene(job, sem):
         return {"mode": "sentence", "boundaries": sents, "trimmed": trimmed}
 
 
+# ---------- Amazon Polly ----------
+
+def polly_client(region=None):
+    """A Polly client from boto3's standard credential chain and region configuration."""
+    try:
+        import boto3
+    except ImportError:
+        raise EnvError(BOTO3_MISSING)
+    sess = boto3.Session()
+    region = region or sess.region_name
+    if not region:
+        raise EnvError("no AWS region configured for Polly: set AWS_REGION, or region in the AWS config file (aws configure)")
+    return sess.client("polly", region_name=region)   # timeouts and retries: botocore's standard configuration
+
+
+def polly_error(e, voice):
+    """A boto3 / botocore exception -> one EnvError line that says what to do."""
+    name = type(e).__name__
+    resp = getattr(e, "response", None)
+    code = (resp.get("Error", {}).get("Code", "") if isinstance(resp, dict) else "") or ""
+    msg = (str(e).splitlines() or [name])[0][:300]
+    if name in ("NoCredentialsError", "PartialCredentialsError", "SSOTokenLoadError", "UnauthorizedSSOTokenError",
+                "TokenRetrievalError", "CredentialRetrievalError"):
+        return EnvError(f"no usable AWS credentials for Polly ({name}): configure the standard AWS chain "
+                        f"(environment, AWS config files, SSO login or an instance role), or use --engine edge")
+    if code in ("AccessDeniedException", "AccessDenied", "UnrecognizedClientException", "ExpiredTokenException"):
+        return EnvError(f"Polly refused the request ({code}): the AWS identity needs polly:SynthesizeSpeech "
+                        f"with valid credentials, or use --engine edge")
+    return EnvError(f"Polly failed for voice {voice}: {code or name}: {msg}")
+
+
+def polly_probe(lang):
+    """auto: is Polly usable here? One tiny speech-marks request with the default voice. -> (ok, why)."""
+    voice = default_voice("polly", lang)
+    if not voice:
+        return False, f"no default Polly voice for lang {lang}"
+    try:
+        import boto3
+    except ImportError:
+        return False, "boto3 is not available in this Python"
+    try:
+        sess = boto3.Session()
+        if sess.get_credentials() is None:
+            return False, "no AWS credentials found"
+        if not sess.region_name:
+            return False, "no AWS region configured"
+        polly_client(sess.region_name).synthesize_speech(Engine="neural", VoiceId=voice, OutputFormat="json",
+                                                          SpeechMarkTypes=["sentence"], Text="ok")
+        return True, f"AWS credentials work for Polly in {sess.region_name}"
+    except EnvError as e:
+        return False, f"Polly not usable ({str(e)[:200]})"
+    except Exception as e:   # noqa: BLE001  (any failure means: not usable here; the reason is printed)
+        return False, f"Polly not usable ({str(polly_error(e, voice))[:200]})"
+
+
+def polly_synth(client, text, voice, rate, lang, mp3):
+    """Audio (mp3, 24 kHz) and word speech marks from the same SSML, so the timings match the audio."""
+    if len(text) > POLLY_MAX_CHARS:
+        raise EnvError(f"narration is {len(text)} characters; Polly takes at most {POLLY_MAX_CHARS} per request: split the scene")
+    common = dict(Engine="neural", VoiceId=voice, TextType="ssml", Text=polly_ssml(text, rate, lang))
+    try:
+        audio = client.synthesize_speech(OutputFormat="mp3", SampleRate="24000", **common)["AudioStream"].read()
+        raw = client.synthesize_speech(OutputFormat="json", SpeechMarkTypes=["word"], **common)["AudioStream"].read()
+    except Exception as e:   # noqa: BLE001  (service / network errors are reported, not hidden)
+        raise polly_error(e, voice)
+    if not audio:
+        raise EnvError(f"Polly returned no audio for voice {voice}")
+    with open(mp3, "wb") as f:
+        f.write(audio)
+    return [json.loads(ln) for ln in raw.decode("utf-8").splitlines() if ln.strip()]
+
+
+async def voice_scene_polly(job, sem, client):
+    async with sem:
+        marks = await asyncio.to_thread(polly_synth, client, job["spoken"], job["voice"], job["rate"], job["lang"], job["mp3"])
+        trimmed = trim_tail(job["mp3"])
+        full = probe_seconds(job["mp3"])
+        words = polly_boundaries(marks, full - TAIL_KEEP if trimmed else full)
+        if words:
+            return {"mode": "word", "boundaries": words, "trimmed": trimmed}
+        return {"mode": "sentence", "boundaries": [{"text": job["spoken"], "start": 0.0, "end": round(full, 3)}],
+                "trimmed": trimmed}
+
+
 def build_timings(text, spoken, s2o, cache, duration, max_width):
     raw = cache["boundaries"] if cache["mode"] == "word" else split_sentences(cache["boundaries"])
     words = map_words(text, spoken, s2o, raw)
@@ -368,13 +598,27 @@ def build_timings(text, spoken, s2o, cache, duration, max_width):
     return [{"text": w["text"], "start": round(w["start"], 3), "end": round(w["end"], 3)} for w in words], caps
 
 
-def list_voices(lang):
+def list_voices(lang, engine=None):
     lang = (lang or "all").lower()
-    rows = [v for v in VOICES if lang in ("all", v[0]) or v[1].lower().startswith(lang)]
-    if not rows:
-        die(f"no curated voices for '{lang}' (try zh, en or all); any edge-tts voice name also works: edge-tts --list-voices")
-    for lg, name, sex, desc in rows:
-        print(f"{lg:3} {name:24} {sex:7} {desc}")
+    if engine == "auto":
+        ok, why = polly_probe({"zh": "zh-CN", "en": "en-US", "all": "en-US"}.get(lang, lang))
+        engine = "polly" if ok else "edge"
+        print(f"auto picks {engine}: {why}")
+    printed = 0
+    for eng, table, more in (("edge", VOICES, "edge-tts --list-voices"),
+                             ("polly", POLLY_VOICES, "aws polly describe-voices --engine neural")):
+        if engine and engine != eng:
+            continue
+        rows = [v for v in table if lang in ("all", v[0]) or v[1].lower().startswith(lang)]
+        if not rows:
+            continue
+        if not engine:
+            print(f"# {eng} (any other voice: {more})")
+        for lg, name, sex, desc in rows:
+            print(f"{lg:3} {name:24} {sex:7} {desc}")
+        printed += len(rows)
+    if not printed:
+        die(f"no curated voices for '{lang}' (try zh, en or all); any edge-tts or Polly neural voice name also works")
 
 
 async def run(a):
@@ -388,7 +632,13 @@ async def run(a):
     max_w = max_caption_width(width, height)
     lang = str(sb.get("lang") or "zh-CN")
     vcfg = sb.get("voice") or {}
-    voice = vcfg.get("name") or DEFAULT_VOICE["zh" if lang.startswith("zh") else "en"]
+    if not isinstance(vcfg, dict):
+        die("storyboard voice must be an object {\"name\", \"rate\"}")
+    sb["voice"] = vcfg   # a null voice becomes the object tts.py writes the chosen voice into
+    engine, why = resolve_engine(a.engine, vcfg, lambda: polly_probe(lang))
+    voice, voice_changed = pick_voice(engine, vcfg, lang, a.engine)
+    print(f"engine: {engine} ({why}), voice {voice}"
+          + (f" (was {vcfg.get('name')}, not a {engine} voice)" if voice_changed and vcfg.get("name") else ""))
     rate = str(vcfg.get("rate") or "+0%")
     if not re.fullmatch(r"[+-]\d{1,3}%", rate):
         die(f"voice.rate must look like +0% or -10%, got {rate!r}")
@@ -396,6 +646,9 @@ async def run(a):
     if not isinstance(pron, dict):
         die("pronounce.json must be an object {\"word\": \"spoken replacement\"}")
     scenes = sb["scenes"]
+    bad_ids = [str(s.get("id")) for s in scenes if not SCENE_ID.fullmatch(str(s.get("id")))]
+    if bad_ids:   # ids become file names: never a path out of the project
+        die(f"scene ids must be letters, digits, - or _ (like S01): {', '.join(bad_ids)}")
     if a.scene and not any(str(s.get("id")) == a.scene for s in scenes):
         die(f"no scene {a.scene} in storyboard (ids: {', '.join(str(s.get('id')) for s in scenes)})")
     vdir = os.path.join(proj, "audio", "voice")
@@ -408,22 +661,34 @@ async def run(a):
         if not text:
             continue
         spoken, s2o = apply_pronounce(text, pron)
-        h = tts_hash(text, spoken, voice, rate)
+        h = tts_hash(text, spoken, voice, rate, engine)
         base = os.path.join(vdir, sid)
         p = {"scene": s, "id": sid, "text": text, "spoken": spoken, "s2o": s2o, "hash": h, "mp3": base + ".mp3",
              "meta": base + ".tts.json", "selected": not a.scene or a.scene == sid}
         plans.append(p)
-        if not p["selected"]:
-            continue
         old = load_json(p["meta"], {}) or {}
+        if not p["selected"]:
+            if old and (old.get("voice") != voice or old.get("engine", "edge") != engine):
+                print(f"{sid}: warning: voiced with {old.get('engine', 'edge')} {old.get('voice')}, not {engine} {voice}: "
+                      f"run tts.py without --scene so the film keeps one voice", file=sys.stderr)
+            continue
         if not a.force and old.get("hash") == h and os.path.isfile(p["mp3"]) and old.get("boundaries"):
             p["cache"], p["reused"] = old, True
         else:
             jobs.append(p)
-        p["voice"], p["rate"] = voice, rate
+        p["voice"], p["rate"], p["lang"] = voice, rate, lang
 
     sem = asyncio.Semaphore(LANES)
-    results = await asyncio.gather(*(voice_scene(j, sem) for j in jobs), return_exceptions=True)
+    if jobs and engine == "edge":
+        if not edge_available():
+            raise EnvError(EDGE_MISSING + (f" [{why}]" if why.startswith("auto") else ""))
+        coros = [voice_scene(j, sem) for j in jobs]
+    elif jobs:
+        client = polly_client()
+        coros = [voice_scene_polly(j, sem, client) for j in jobs]
+    else:
+        coros = []
+    results = await asyncio.gather(*coros, return_exceptions=True)
     failed = []
     for j, r in zip(jobs, results):
         if isinstance(r, BaseException):
@@ -444,7 +709,7 @@ async def run(a):
         words, caps = build_timings(p["text"], p["spoken"], p["s2o"], p["cache"], dur, max_w)
         dump_json(os.path.join(vdir, p["id"] + ".words.json"), words)
         dump_json(os.path.join(vdir, p["id"] + ".captions.json"), caps)
-        meta = {"scene": p["id"], "hash": p["hash"], "voice": voice, "rate": rate, "text": p["text"], "spoken": p["spoken"],
+        meta = {"scene": p["id"], "hash": p["hash"], "engine": engine, "voice": voice, "rate": rate, "text": p["text"], "spoken": p["spoken"],
                 "narration": str(p["scene"].get("narration") or ""), "voice_seconds": round(dur, 3),
                 "trimmed_tail_seconds": p["cache"].get("trimmed", 0.0),
                 "mode": p["cache"]["mode"], "boundaries": p["cache"]["boundaries"]}
@@ -461,9 +726,16 @@ async def run(a):
     for s in scenes:
         if not strip_markup(str(s.get("narration") or "")) and not s.get("duration"):
             print(f"{s.get('id')}: no narration and no duration: set its duration by hand", file=sys.stderr)
-    if changed:
+    if voice_changed and not failed:   # the film now speaks with this engine's voice: later runs infer the same engine
+        old_name = vcfg.get("name")
+        vcfg["name"] = voice
+        if "engine" in vcfg:
+            vcfg["engine"] = engine
+        print(f"storyboard.json: voice.name {old_name or '(none)'} -> {voice} ({engine})")
+    if changed or (voice_changed and not failed):
         dump_json(sb_path, sb)
-        print(f"storyboard.json: {changed} scene duration(s) written")
+        if changed:
+            print(f"storyboard.json: {changed} scene duration(s) written")
     for sid, err in failed:
         print(f"{sid}: FAILED: {err}", file=sys.stderr)
     if failed:
@@ -480,22 +752,29 @@ async def run(a):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Voice every narrated scene with edge-tts; write word timings, captions and scene durations.")
+    ap = argparse.ArgumentParser(description="Voice every narrated scene with edge-tts or Amazon Polly; write word timings, "
+                                             "captions and scene durations.")
     ap.add_argument("--project", help="project directory (contains storyboard.json)")
     ap.add_argument("--scene", help="only this scene id, e.g. S03")
+    ap.add_argument("--engine", choices=ENGINES + ("auto",),
+                    help="edge | polly | auto (default: storyboard voice.engine, else the engine of voice.name, else auto: "
+                         "Polly when AWS credentials work for it, else edge)")
     ap.add_argument("--force", action="store_true", help="re-synthesize even when narration and voice are unchanged")
     ap.add_argument("--list-voices", nargs="?", const="all", metavar="LANG", help="print recommended voices (zh, en or all) and exit")
     a = ap.parse_args()
-    sys.stdout.reconfigure(line_buffering=True)
+    for stream in (sys.stdout, sys.stderr):   # CJK narration must print on any console (Windows code pages too)
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     if a.list_voices:
-        list_voices(a.list_voices)
+        list_voices(a.list_voices, a.engine)
         return 0
     if not a.project:
         ap.error("--project is required")
     tool("ffprobe")
+    tool("ffmpeg")
     try:
         return asyncio.run(run(a))
-    except EnvError as e:
+    except (EnvError, UsageError) as e:
         die(str(e))
 
 

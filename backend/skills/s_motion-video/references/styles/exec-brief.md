@@ -32,9 +32,9 @@ Accent goes only to: the key phrase inside a statement, its underline, the Kicke
 
 ## Type
 
-Font stacks (system fonts only, no web fonts):
-- Serif (statements, titles, chapter numbers, quotes, flow node titles, compare column titles), weight 600-700: `Georgia, "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "Times New Roman", serif`.
-- Sans (body, notes, labels, numbers): `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif`.
+Font stacks (macOS families first, then the bundled faces, see INDEX.md § Fonts):
+- Serif (statements, titles, chapter numbers, quotes, flow node titles, compare column titles), weight 600-700: `Georgia, "Songti SC", "MV Noto Serif SC", "Noto Serif CJK SC", "Source Han Serif SC", SimSun, "Times New Roman", serif`.
+- Sans (body, notes, labels, numbers): `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`.
 
 Scale (u):
 

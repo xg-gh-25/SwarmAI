@@ -5,7 +5,7 @@
  *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
  *   The runtime may override --u on :root; never redefine it inside a scene.
  *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
- * System fonts only; no imports, no url(), no web fonts. GSAP animates transforms/opacity only;
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no imports, no other url(), no remote fonts. GSAP animates transforms/opacity only;
  * these classes set initial layout, never CSS animation or transition.
  *
  * WORLD UNITS: everything inside the SVG camera group (#camera, transform scale(zoom*u)) is in
@@ -13,6 +13,11 @@
  *   (stroke-width: 1.5; font-size: 66px), NOT var(--u): the camera scale already applies u.
  *   Screen-layer classes (frozen strip, captions band, kicker) use var(--u).
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Sans SC"; src: url("fonts/NotoSansSC.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV LXGW WenKai"; src: url("fonts/LXGWWenKai-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Noto Sans Mono"; src: url("fonts/NotoSansMono.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Patrick Hand"; src: url("fonts/PatrickHand-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
 
@@ -40,9 +45,9 @@
   /* sequential ramp: 0 #F2EEE8, .25 #FDDBC7, .5 #F4A582, .75 #D6604D, 1 #B2182B */
 
   /* fonts */
-  --dv-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
-  --dv-mono: "SF Mono", Menlo, "PingFang SC", monospace;
-  --dv-hand: "Chalkboard SE", "Bradley Hand", "Marker Felt", "Hannotate SC", "HanziPen SC", "Kaiti SC", cursive;
+  --dv-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --dv-mono: "SF Mono", Menlo, "MV Noto Sans Mono", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", monospace;
+  --dv-hand: "Chalkboard SE", "Bradley Hand", "Marker Felt", "MV Patrick Hand", "Hannotate SC", "HanziPen SC", "Kaiti SC", "MV LXGW WenKai", cursive;
 
   /* type scale, screen layer (u) */
   --dv-fs-caption: calc(42 * var(--u));     /* min 34u */

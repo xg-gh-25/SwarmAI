@@ -5,11 +5,18 @@
  *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
  *   The runtime may override --u on :root; never redefine it inside a scene.
  *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
- * System fonts only; no imports, no web fonts. GSAP (one clock, pure draw(t)) writes transforms,
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no imports, no remote fonts. GSAP (one clock, pure draw(t)) writes transforms,
  * dash offsets, clip insets and opacity; these classes set initial layout, never CSS animation or transition.
  * The drawing itself is ONE inline SVG per scene in sheet units (viewBox = sheet size, 1 sheet unit = 1u at
  * camera zoom 1). Stroke widths scale with --bpz = zoom^-0.35 so the on-screen width is w x zoom^0.65.
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Sans SC"; src: url("fonts/NotoSansSC.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV LXGW WenKai"; src: url("fonts/LXGWWenKai-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Noto Sans Mono"; src: url("fonts/NotoSansMono.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Patrick Hand"; src: url("fonts/PatrickHand-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Roboto Condensed"; src: url("fonts/RobotoCondensed.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Great Vibes"; src: url("fonts/GreatVibes-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
 
@@ -26,11 +33,11 @@
   --bp-stamp: #C23B2E;          /* the one non-blue colour: rubber-stamp verdict, once */
   --bp-note-bg: rgba(12, 28, 62, .58);
 
-  /* fonts (macOS system stand-ins) */
-  --bp-hand: "Noteworthy", "Chalkboard SE", "Bradley Hand", "Hannotate SC", "HanziPen SC", "Kaiti SC", cursive;
-  --bp-tech: "DIN Alternate", "Avenir Next Condensed", "Avenir Next", "PingFang SC", sans-serif;
-  --bp-sign: "Snell Roundhand", "Apple Chancery", "Savoye LET", cursive;
-  --bp-mono: "SF Mono", Menlo, "PingFang SC", monospace;
+  /* fonts (macOS stand-ins first, then the bundled faces) */
+  --bp-hand: "Noteworthy", "Chalkboard SE", "Bradley Hand", "MV Patrick Hand", "Hannotate SC", "HanziPen SC", "Kaiti SC", "MV LXGW WenKai", cursive;
+  --bp-tech: "DIN Alternate", "Avenir Next Condensed", "Avenir Next", "MV Roboto Condensed", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", sans-serif;
+  --bp-sign: "Snell Roundhand", "Apple Chancery", "Savoye LET", "MV Great Vibes", cursive;
+  --bp-mono: "SF Mono", Menlo, "MV Noto Sans Mono", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", monospace;
 
   /* type scale (screen u at camera zoom 1; inside the sheet SVG use the same numbers as font-size) */
   --bp-fs-header: calc(112 * var(--u));     /* sheet title, letter-spaced 12u */

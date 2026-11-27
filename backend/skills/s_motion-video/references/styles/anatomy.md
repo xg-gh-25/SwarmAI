@@ -35,7 +35,7 @@ Colour only when colour is the subject (m): RGB channels as a set (`#E5484D #30A
 
 ## Type
 
-One monospace face for every word on the plate (m): `--an-mono` = `"SF Mono", Menlo, "PingFang SC", monospace`; tabular figures for numbers.
+One monospace face for every word on the plate (m): `--an-mono` = `"SF Mono", Menlo, "MV Noto Sans Mono", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", monospace`; tabular figures for numbers.
 
 | Role | Size | Details |
 |---|---|---|

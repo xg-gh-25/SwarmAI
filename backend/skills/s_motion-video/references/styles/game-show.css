@@ -7,10 +7,15 @@
  *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
  *   Inside the stage SVG (viewBox "0 0 1920 1080", portrait "0 0 1080 1920") one user unit IS one u,
  *   so the .gs-* SVG classes below give stroke widths and font sizes as plain numbers (user units).
- * System fonts only; no imports, no remote or local file URLs, no web fonts. GSAP animates transforms/opacity only;
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no imports, no remote or local file URLs, no remote fonts. GSAP animates transforms/opacity only;
  * these classes set initial layout, never CSS animation or transition.
  * Textures: none. The look is flat fills + one ink outline + hard offset shadows; patterns are gradients.
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Sans SC"; src: url("fonts/NotoSansSC.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV LXGW WenKai"; src: url("fonts/LXGWWenKai-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Patrick Hand"; src: url("fonts/PatrickHand-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Nunito"; src: url("fonts/Nunito.woff2") format("woff2"); font-weight: 200 1000; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
 
@@ -36,10 +41,10 @@
 
   /* fonts */
   /* Latin + numbers: heavy rounded (Arial Rounded MT Bold resolves in headless Chromium; SF Pro Rounded does not) */
-  --gs-round: "Arial Rounded MT Bold", "SF Pro Rounded", "Hiragino Sans GB", "PingFang SC", sans-serif;
+  --gs-round: "Arial Rounded MT Bold", "SF Pro Rounded", "MV Nunito", "Hiragino Sans GB", "PingFang SC", "MV Noto Sans SC", sans-serif;
   /* CJK + plain heavy text: Hiragino Sans GB W6 is the heaviest simplified-Chinese system face */
-  --gs-black: "Hiragino Sans GB", "PingFang SC", "Noto Sans CJK SC", "Helvetica Neue", sans-serif;
-  --gs-hand: "Chalkboard SE", "Marker Felt", "HanziPen SC", "Hannotate SC", cursive;
+  --gs-black: "Hiragino Sans GB", "PingFang SC", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", "Helvetica Neue", sans-serif;
+  --gs-hand: "Chalkboard SE", "Marker Felt", "MV Patrick Hand", "HanziPen SC", "Hannotate SC", "MV LXGW WenKai", cursive;
 
   /* type scale (u) */
   --gs-fs-title: calc(200 * var(--u));   /* film title, glyph-by-glyph pop */

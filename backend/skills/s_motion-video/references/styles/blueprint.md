@@ -26,9 +26,9 @@ Accent rule: no accent hue; emphasis is weight, a nib, a balloon or a dimension;
 
 ## Type
 
-- Hand lettering (header, labels, notes, dimensions, balloons, captions), always capitals: `"Noteworthy", "Chalkboard SE", "Bradley Hand", "Hannotate SC", "HanziPen SC", "Kaiti SC", cursive`.
-- Technical sans (title-block fields, status, sub-lines, view names), 700, capitals, tracked: `"DIN Alternate", "Avenir Next Condensed", "Avenir Next", "PingFang SC", sans-serif`.
-- Script, signatures only: `"Snell Roundhand", "Apple Chancery", "Savoye LET", cursive`.
+- Hand lettering (header, labels, notes, dimensions, balloons, captions), always capitals: `"Noteworthy", "Chalkboard SE", "Bradley Hand", "MV Patrick Hand", "Hannotate SC", "HanziPen SC", "Kaiti SC", "MV LXGW WenKai", cursive`.
+- Technical sans (title-block fields, status, sub-lines, view names), 700, capitals, tracked: `"DIN Alternate", "Avenir Next Condensed", "Avenir Next", "MV Roboto Condensed", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", sans-serif`.
+- Script, signatures only: `"Snell Roundhand", "Apple Chancery", "Savoye LET", "MV Great Vibes", cursive`.
 
 | Role (sheet units at zoom 1) | Size | Details |
 |---|---|---|

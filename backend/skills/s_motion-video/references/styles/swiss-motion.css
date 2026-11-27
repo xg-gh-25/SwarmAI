@@ -5,10 +5,12 @@
  *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
  *   The runtime may override --u on :root; never redefine it inside a scene.
  *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
- * System fonts only; no imports, no url(), no web fonts. GSAP animates transforms/opacity only;
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no imports, no other url(), no remote fonts. GSAP animates transforms/opacity only;
  * these classes set initial layout, never CSS animation or transition.
  * Inside .sw-artifact sizes are paper px (706 x 1008 sheet); the camera scale already contains u.
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Sans SC"; src: url("fonts/NotoSansSC.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
 
@@ -27,7 +29,7 @@
   --sw-wall: #DFDED9;             /* wall board */
 
   /* font: one typeface, many weights */
-  --sw-sans: "Helvetica Neue", -apple-system, "SF Pro Text", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+  --sw-sans: "Helvetica Neue", -apple-system, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
 
   /* type scale */
   --sw-fs-title: calc(120 * var(--u));

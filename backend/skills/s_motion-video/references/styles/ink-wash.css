@@ -7,12 +7,15 @@
  *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
  * Painting units: the ink layer is one inline <svg class="iw-ink"> whose viewBox is the frame in u
  *   (1920 x 1080 landscape, 1080 x 1920 portrait), so every number inside it is already in u.
- * System fonts only; no imports, no remote url(), no web fonts, no bitmaps. The only url() here is a
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no imports, no remote url(), no remote fonts, no bitmaps. The only url() here is a
  *   data: SVG of procedural noise (rice paper). The ink filters (#iw-wet, #iw-dry, #iw-edge, #iw-bloom)
  *   and the brush kit are in the SCENE KIT comment at the end of this file: copy them into each scene.
  * GSAP animates transforms, opacity, clip-path, filter blur, stroke-dashoffset and attr r; these classes set
  *   initial layout, never CSS animation or transition.
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Serif SC"; src: url("fonts/NotoSerifSC.woff2") format("woff2"); font-weight: 200 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV LXGW WenKai"; src: url("fonts/LXGWWenKai-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
 
@@ -37,11 +40,11 @@
   --iw-zhu: #B02E22;
   --iw-zhu-on-paper: #B23C30;
 
-  /* fonts (macOS system) */
-  --iw-brush: "Xingkai SC", "Kaiti SC", "STKaiti", "Kai", "BiauKai", "Songti SC", serif;   /* calligraphy titles */
-  --iw-kai: "Kaiti SC", "STKaiti", "Kai", "BiauKai", "Songti SC", "Noto Serif CJK SC", serif; /* inscriptions, labels */
-  --iw-song: "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", serif;       /* seal glyphs, numerals */
-  --iw-latin: "Hoefler Text", "Baskerville", "Palatino", Georgia, "Kaiti SC", serif;          /* Latin, italic */
+  /* fonts (macOS families first, then the bundled faces) */
+  --iw-brush: "Xingkai SC", "Kaiti SC", "STKaiti", "Kai", "BiauKai", "MV LXGW WenKai", "Songti SC", serif;   /* calligraphy titles */
+  --iw-kai: "Kaiti SC", "STKaiti", "Kai", "BiauKai", "MV LXGW WenKai", "KaiTi", "Songti SC", "Noto Serif CJK SC", serif; /* inscriptions, labels */
+  --iw-song: "Songti SC", "STSong", "MV Noto Serif SC", "Noto Serif CJK SC", "Source Han Serif SC", SimSun, serif;       /* seal glyphs, numerals */
+  --iw-latin: "Hoefler Text", "Baskerville", "Palatino", "Palatino Linotype", Georgia, "Kaiti SC", "MV LXGW WenKai", serif;          /* Latin, italic */
 
   /* type scale */
   --iw-fs-hero: calc(360 * var(--u));     /* one great character (240-420) */

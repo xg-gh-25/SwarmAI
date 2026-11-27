@@ -5,13 +5,16 @@
  *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
  *   The runtime may override --u on :root; never redefine it inside a scene.
  *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
- * System fonts only; no imports, no remote URLs, no web fonts. GSAP animates transforms/opacity only;
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no imports, no remote URLs, no remote fonts. GSAP animates transforms/opacity only;
  * these classes set initial layout, never CSS animation or transition.
  * The machine itself is inline SVG paths built by the projection snippet in anatomy.md; the classes
  * below give it its tones (paper fills, four side shades, white tops, graphite hairlines) and draw
  * the framed figure card with its four corner labels.
  * Light theme is the default; add class "an-dark" to #stage for the dark plate.
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Sans SC"; src: url("fonts/NotoSansSC.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Noto Sans Mono"; src: url("fonts/NotoSansMono.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
 
@@ -50,8 +53,8 @@
   --an-brass-t: #EFE0BF; --an-brass: #D9BC86; --an-brass-d: #B8955A; --an-brass-line: #7A5C2A;  /* optional metal */
 
   /* fonts: one mono for every word on the plate */
-  --an-mono: "SF Mono", Menlo, "PingFang SC", monospace;
-  --an-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+  --an-mono: "SF Mono", Menlo, "MV Noto Sans Mono", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", monospace;
+  --an-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
 
   /* type scale */
   --an-fs-corner: calc(26 * var(--u));     /* Fig n, title, phase */

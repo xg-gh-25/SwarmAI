@@ -5,10 +5,14 @@
  *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
  *   The runtime may override --u on :root; never redefine it inside a scene.
  *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
- * System fonts only; no imports, no url(), no web fonts. GSAP animates transforms/opacity only;
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no imports, no other url(), no remote fonts. GSAP animates transforms/opacity only;
  * these classes set initial layout, never CSS animation or transition.
  * Theme: light tokens on :root; add class "ls-dark" to a world copy (theme reveal) or to <body>.
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Sans SC"; src: url("fonts/NotoSansSC.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Noto Serif SC"; src: url("fonts/NotoSerifSC.woff2") format("woff2"); font-weight: 200 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Noto Sans Mono"; src: url("fonts/NotoSansMono.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
 
@@ -28,10 +32,10 @@
   --ls-px-body: #D97757; --ls-px-shade: #B85F40; --ls-px-eye: #2A2622; --ls-px-dust: #CFC7B6; --ls-px-spark: #F2C14E;
 
   /* fonts */
-  --ls-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
-  --ls-serif: Georgia, "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "Times New Roman", serif;
-  --ls-display: Baskerville, Georgia, "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", serif;
-  --ls-mono: "SF Mono", Menlo, "PingFang SC", monospace;
+  --ls-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --ls-serif: Georgia, "Songti SC", "MV Noto Serif SC", "Noto Serif CJK SC", "Source Han Serif SC", SimSun, "Times New Roman", serif;
+  --ls-display: Baskerville, Georgia, "Songti SC", "MV Noto Serif SC", "Noto Serif CJK SC", "Source Han Serif SC", SimSun, serif;
+  --ls-mono: "SF Mono", Menlo, "MV Noto Sans Mono", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", monospace;
 
   /* type scale (real-app sizes) */
   --ls-fs-body: calc(16 * var(--u));

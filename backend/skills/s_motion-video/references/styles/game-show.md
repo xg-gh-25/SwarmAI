@@ -26,8 +26,8 @@ Colour logic: a contestant's body colour is its identity for the whole film and 
 
 ## Type
 
-- Display (Latin, numbers, judgement words, round numbers, name tags): `"Arial Rounded MT Bold", "SF Pro Rounded", "Hiragino Sans GB", "PingFang SC", sans-serif`, weight 700 (`--gs-round`). Headless Chromium resolves Arial Rounded MT Bold; SF Pro Rounded and `ui-rounded` do not resolve there (m, probed).
-- CJK and plain heavy text (round-card names, plates, stickers' second line): `"Hiragino Sans GB", "PingFang SC", "Noto Sans CJK SC", "Helvetica Neue", sans-serif`, weight 900 (renders W6) (`--gs-black`).
+- Display (Latin, numbers, judgement words, round numbers, name tags): `"Arial Rounded MT Bold", "SF Pro Rounded", "MV Nunito", "Hiragino Sans GB", "PingFang SC", "MV Noto Sans SC", sans-serif`, weight 700 (`--gs-round`). Headless Chromium resolves Arial Rounded MT Bold; SF Pro Rounded and `ui-rounded` do not resolve there (m, probed).
+- CJK and plain heavy text (round-card names, plates, stickers' second line): `"Hiragino Sans GB", "PingFang SC", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", "Helvetica Neue", sans-serif`, weight 900 (renders W6) (`--gs-black`).
 - Hand-lettered props only (a note, a chalkboard): `--gs-hand`.
 
 | Role | Size (u) | Outline stroke (under the fill) |

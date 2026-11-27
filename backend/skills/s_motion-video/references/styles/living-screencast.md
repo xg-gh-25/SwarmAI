@@ -38,9 +38,9 @@ The mascot uses one saturated hue no UI element uses, findable in any frame; if 
 
 ## Type
 
-- UI sans: `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif`.
-- Serif (headlines, chapter names, big numbers, plan title): `Georgia, "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "Times New Roman", serif`; display sizes put `Baskerville` first.
-- Mono (code, file tree, fast-forward tag, wipe number): `"SF Mono", Menlo, "PingFang SC", monospace`.
+- UI sans: `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`.
+- Serif (headlines, chapter names, big numbers, plan title): `Georgia, "Songti SC", "MV Noto Serif SC", "Noto Serif CJK SC", "Source Han Serif SC", SimSun, "Times New Roman", serif`; display sizes put `Baskerville` first.
+- Mono (code, file tree, fast-forward tag, wipe number): `"SF Mono", Menlo, "MV Noto Sans Mono", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", monospace`.
 
 | Role | Size | Weight / details |
 |---|---|---|

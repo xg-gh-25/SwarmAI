@@ -30,9 +30,9 @@ Ink sets (one per film, meanings never change): classic (default) `#23262C` / `#
 ## Type
 
 Handwriting only on the board, titles and end lines included.
-- Latin, digits, formula symbols (μ ≈ → ← × ÷ − ✓ ² ³ ↑ ↓ ° ± % .): `"Chalkboard SE", "Bradley Hand", "Marker Felt", cursive`.
-- CJK: `"Hannotate SC", "HanziPen SC", "Kaiti SC", cursive`, weight 300-400, written with the three-row sweep; CJK punctuation is one sweep.
-- Captions only (screen): `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif`, 500.
+- Latin, digits, formula symbols (μ ≈ → ← × ÷ − ✓ ² ³ ↑ ↓ ° ± % .): `"Chalkboard SE", "Bradley Hand", "Marker Felt", "MV Patrick Hand", cursive`.
+- CJK: `"Hannotate SC", "HanziPen SC", "Kaiti SC", "MV LXGW WenKai", cursive`, weight 300-400, written with the three-row sweep; CJK punctuation is one sweep.
+- Captions only (screen): `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`, 500.
 
 Sizes are cap height h in board units. Latin font size = h / capRatio, capRatio measured once with canvas `measureText("H").actualBoundingBoxAscent / fontSize` (about 0.7 for Chalkboard SE). CJK font size = 1.3h, advance 1.04 x CJK size.
 

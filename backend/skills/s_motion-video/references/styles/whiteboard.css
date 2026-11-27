@@ -8,11 +8,15 @@
  * Board units: inside #wb-world one board unit = 1u at camera zoom 1; the camera only adds
  *   translate/rotate/scale(z) on #wb-world (origin 0 0). Board SVGs use viewBox in board units
  *   and are sized calc(BW * var(--u)) x calc(BH * var(--u)).
- * System fonts only; no imports, no url(), no web fonts. Filters (#wb-wobble, #wb-scuff, #wb-dry) live in
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no imports, no other url(), no remote fonts. Filters (#wb-wobble, #wb-scuff, #wb-dry) live in
  *   the scene's inline <svg><defs> and are attached there (filter="url(#...)" attribute), not in this file.
  * GSAP animates transforms/opacity/clip-path/dashoffset only; these classes set initial layout,
  * never CSS animation or transition.
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Sans SC"; src: url("fonts/NotoSansSC.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV LXGW WenKai"; src: url("fonts/LXGWWenKai-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Patrick Hand"; src: url("fonts/PatrickHand-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
 
@@ -39,9 +43,9 @@
   --wb-ink-alpha: .94;
 
   /* fonts */
-  --wb-hand: "Chalkboard SE", "Bradley Hand", "Marker Felt", "Hannotate SC", "HanziPen SC", "Kaiti SC", cursive;
-  --wb-hand-cjk: "Hannotate SC", "HanziPen SC", "Kaiti SC", "Chalkboard SE", cursive;
-  --wb-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+  --wb-hand: "Chalkboard SE", "Bradley Hand", "Marker Felt", "MV Patrick Hand", "Hannotate SC", "HanziPen SC", "Kaiti SC", "MV LXGW WenKai", cursive;
+  --wb-hand-cjk: "Hannotate SC", "HanziPen SC", "Kaiti SC", "MV LXGW WenKai", "Chalkboard SE", "MV Patrick Hand", cursive;
+  --wb-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
 
   /* type scale: font sizes for board text (board units = u at zoom 1).
      Latin font-size = cap height h / capRatio (~0.7); CJK font-size = 1.3 h. */

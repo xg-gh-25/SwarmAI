@@ -33,8 +33,8 @@ Photos are grey with amber warmth: brightness 0.42-0.62 (default 0.52; a person 
 
 ## Type
 
-- Serif (title, brand, statements, golden lines, quotes), 600-700: `Georgia, "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "Times New Roman", serif`.
-- Sans (everything else): `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif`.
+- Serif (title, brand, statements, golden lines, quotes), 600-700: `Georgia, "Songti SC", "MV Noto Serif SC", "Noto Serif CJK SC", "Source Han Serif SC", SimSun, "Times New Roman", serif`.
+- Sans (everything else): `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`.
 
 | Role | Size | Details |
 |---|---|---|

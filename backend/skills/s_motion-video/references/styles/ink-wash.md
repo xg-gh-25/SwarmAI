@@ -25,11 +25,11 @@ Ink runs from cool grey when thin to warm black when dense (m); the tone colours
 
 ## Type
 
-Font stacks (macOS system fonts):
-- Brush (calligraphy titles, a hero character): `"Xingkai SC", "Kaiti SC", "STKaiti", "Kai", "BiauKai", "Songti SC", serif`, weight 700 (Xingkai SC Bold).
-- Kai (inscriptions, colophons, labels, captions): `"Kaiti SC", "STKaiti", "Kai", "BiauKai", "Songti SC", "Noto Serif CJK SC", serif`, weight 400.
-- Song (seal glyphs, numerals in an inscription): `"Songti SC", "STSong", "Noto Serif CJK SC", serif`, seal weight 900.
-- Latin (rare; English lines in an inscription): `"Hoefler Text", "Baskerville", "Palatino", Georgia, serif`, italic 400 for lines, upright capitals with tracking .18em for titles (m: 50 px caps, 9 px tracking).
+Font stacks (macOS families first, then the bundled faces, see INDEX.md § Fonts):
+- Brush (calligraphy titles, a hero character): `"Xingkai SC", "Kaiti SC", "STKaiti", "Kai", "BiauKai", "MV LXGW WenKai", "Songti SC", serif`, weight 700 (Xingkai SC Bold).
+- Kai (inscriptions, colophons, labels, captions): `"Kaiti SC", "STKaiti", "Kai", "BiauKai", "MV LXGW WenKai", "KaiTi", "Songti SC", "Noto Serif CJK SC", serif`, weight 400.
+- Song (seal glyphs, numerals in an inscription): `"Songti SC", "STSong", "MV Noto Serif SC", "Noto Serif CJK SC", serif`, seal weight 900.
+- Latin (rare; English lines in an inscription): `"Hoefler Text", "Baskerville", "Palatino", "Palatino Linotype", Georgia, "MV LXGW WenKai", serif`, italic 400 for lines, upright capitals with tracking .18em for titles (m: 50 px caps, 9 px tracking).
 
 | Role | Size (u) | Details |
 |---|---|---|

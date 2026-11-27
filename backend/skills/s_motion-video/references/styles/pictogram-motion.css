@@ -5,12 +5,15 @@
  *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
  *   The runtime may override --u on :root; never redefine it inside a scene.
  *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
- * System fonts only; no imports, no remote or bitmap URLs, no web fonts. GSAP animates transforms/opacity only;
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no imports, no remote or bitmap URLs, no remote fonts. GSAP animates transforms/opacity only;
  * these classes set initial layout, never CSS animation or transition.
  * The grid pattern, sun disc and pictogram figures are inline SVG built by the kit in
  * pictogram-motion.md ("Technique library"); a card reads its hue from --c0..--c4 / --fg,
  * which the kit sets on each .pm-card (PM.hue(el, "cobalt")).
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Sans SC"; src: url("fonts/NotoSansSC.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Noto Sans Mono"; src: url("fonts/NotoSansMono.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
 
@@ -28,10 +31,10 @@
   --pm-slate-0: #10121B;   --pm-slate-1: #161925;   --pm-slate-2: #1D2131;   --pm-slate-3: #2A2F40;   --pm-slate-4: #3A3F52;   --pm-slate-fg: #F9F4E8;
 
   /* fonts */
-  --pm-sans: -apple-system, "SF Pro Display", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
-  --pm-heavy-cjk: "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;   /* zh: heaviest system weight is 600 */
-  --pm-heavy-ja: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "PingFang SC", sans-serif;  /* ja: W8-W9 at 800-900 */
-  --pm-mono: "SF Mono", Menlo, "PingFang SC", monospace;
+  --pm-sans: -apple-system, "SF Pro Display", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --pm-heavy-cjk: "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;   /* zh: heaviest system weight is 600 */
+  --pm-heavy-ja: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "PingFang SC", "Yu Gothic", Meiryo, "Noto Sans CJK JP", "MV Noto Sans SC", sans-serif;  /* ja: W8-W9 at 800-900 */
+  --pm-mono: "SF Mono", Menlo, "MV Noto Sans Mono", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", monospace;
 
   /* grid: one square cell = 1/6 of the 1080 frame height */
   --pm-cell: calc(180 * var(--u));

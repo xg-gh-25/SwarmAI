@@ -5,11 +5,14 @@
  *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
  *   The runtime may override --u on :root; never redefine it inside a scene.
  *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
- * System fonts only; no imports, no url(), no web fonts. GSAP animates transforms/opacity only;
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no imports, no other url(), no remote fonts. GSAP animates transforms/opacity only;
  * these classes set initial layout, never CSS animation or transition.
  * The isometric world itself is inline SVG polygons built by script (see iso-infographic.md);
  * the classes below style the ground, the ink information layer and the paper cards.
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Sans SC"; src: url("fonts/NotoSansSC.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Jost"; src: url("fonts/Jost.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
 
@@ -43,8 +46,8 @@
   --iso-led: #7FD6A4;
 
   /* fonts */
-  --iso-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
-  --iso-num: Futura, "Avenir Next", "PingFang SC", sans-serif;   /* stand-in for a geometric number face */
+  --iso-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --iso-num: Futura, "Avenir Next", "MV Jost", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", sans-serif;   /* stand-in for a geometric number face */
 
   /* type scale */
   --iso-fs-title: calc(70 * var(--u));

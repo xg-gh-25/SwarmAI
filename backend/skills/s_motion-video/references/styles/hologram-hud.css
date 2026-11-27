@@ -5,12 +5,16 @@
  *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
  *   The runtime may override --u on :root; never redefine it inside a scene.
  *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
- * System fonts only; no import rules, no url(), no web fonts. GSAP animates transforms/opacity/clip-path only;
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no import rules, no other url(), no remote fonts. GSAP animates transforms/opacity/clip-path only;
  * these classes set initial layout, never CSS animation or transition.
  * The wireframe subject, projector pad, scan plane, target boxes and leaders are drawn on a 2D canvas
  * by the scene (see hologram-hud.md, Technique library); the classes below style the stage,
  * the HUD frame text and the dark plates (cards, chips, title, footer).
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Sans SC"; src: url("fonts/NotoSansSC.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Noto Sans Mono"; src: url("fonts/NotoSansMono.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Roboto Condensed"; src: url("fonts/RobotoCondensed.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
 
@@ -32,8 +36,8 @@
   --hh-tick: rgba(112, 236, 255, .70);       /* plate corner ticks */
 
   /* fonts (system stand-ins: condensed light caps for values/names, condensed demi for labels, mono for micro data) */
-  --hh-ui: "Avenir Next Condensed", "DIN Alternate", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
-  --hh-mono: "SF Mono", Menlo, "PingFang SC", monospace;
+  --hh-ui: "Avenir Next Condensed", "DIN Alternate", "Helvetica Neue", "MV Roboto Condensed", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --hh-mono: "SF Mono", Menlo, "MV Noto Sans Mono", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", monospace;
 
   /* type scale */
   --hh-fs-name: calc(176 * var(--u));        /* product / subject name, weight 200, tracking 26u */

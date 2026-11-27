@@ -44,9 +44,9 @@ Colour is meaning: assign one colour per role before building and keep it all fi
 
 ## Type
 
-Font stacks (system fonts only):
-- Text (CJK and Latin words), titles and labels 700, notes 500: `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif`.
-- Numbers, chapter numbers, Latin abbreviations (geometric face): `Futura, "Avenir Next", "PingFang SC", sans-serif`; counters may use `"Avenir Next"` with `font-variant-numeric: tabular-nums` for stable width.
+Font stacks (macOS families first, then the bundled faces, see INDEX.md § Fonts):
+- Text (CJK and Latin words), titles and labels 700, notes 500: `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`.
+- Numbers, chapter numbers, Latin abbreviations (geometric face): `Futura, "Avenir Next", "MV Jost", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", sans-serif`; counters may use `"Avenir Next"` with `font-variant-numeric: tabular-nums` for stable width.
 
 | Role | Size | Weight / details |
 |---|---|---|

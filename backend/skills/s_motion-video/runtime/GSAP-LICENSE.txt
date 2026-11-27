@@ -19,3 +19,41 @@ GreenSock's standard "no charge" license can be viewed at <a href="https://gsap.
 
 
 Full terms: https://gsap.com/standard-license
+
+
+DECISION (read 2026-11-27 from https://gsap.com/standard-license, "Effective date: April 30, 2025,
+Last modified date: May 30, 2025", Copyright 2025 Webflow): keep gsap.min.js vendored, unmodified.
+
+This file is NOT covered by the licence of the repository that carries it; it stays under the GSAP
+Standard License above. The reasoning, clause by clause:
+
+1. Grant (II): "use, reproduce, display, and implement GSAP Products solely for Permitted Uses".
+   "Permitted Uses" (I) = "the implementation and/or use of GSAP Products on any website, web
+   application, or digital interface by any person or entity". Each scene of this skill is a web page
+   that loads gsap.min.js; reproducing the file in a repository and in an installed app that renders
+   those pages is reproduction for a permitted use, the same as every web app that ships GSAP inside
+   its bundle. The licence has no clause against redistribution or open-source repositories.
+2. Prohibited Uses (I, III): "tools that allow users to build visual animations without code that ...
+   competes with Webflow's visual animation building capabilities"; Competitive Products = software to
+   "create, edit, or manage animations through a visual interface or builder similar to Webflow".
+   This skill has no visual interface or builder: an agent writes HTML and GSAP code, which renders to
+   an MP4 file; nobody edits animations through a GUI and GSAP never leaves the user's machine inside
+   the delivered film. The licence's own FAQ: "Is it acceptable for AI tools like ChatGPT, Cursor,
+   Lovable, Webstudio, etc. to generate GSAP code? Absolutely! AI-generated code is not a 'Prohibited
+   Use'." The skill does not reverse engineer GSAP.
+3. Fees: the page's plain-English summary says end users must not be charged a fee to use the product
+   (otherwise a commercial licence applies); the legal sections I-VI contain no fee condition, and the
+   FAQ says commercial use is covered at no charge. SwarmAI is distributed without charge, so either
+   reading is met. A distributor that charges end users for a product containing this file must check
+   the current terms first.
+4. Notices (III): the copyright and licence header at the top of gsap.min.js must stay; the file is
+   vendored byte for byte.
+5. Amendments (VI): Webflow may revise the licence; a version released before a revision may keep being
+   used under the terms that applied to it. This is why the version is pinned (3.15.1). Before upgrading
+   GSAP, re-read https://gsap.com/standard-license and record the result here.
+6. Termination (V): the licence can be terminated for non-compliance; nothing above relies on an
+   exception or a consent.
+
+Rejected alternative: downloading GSAP from npm on first use (pinned sha256, exit 2 offline). The
+licence does not require it, and it would add a network dependency and an offline failure to every
+first render.

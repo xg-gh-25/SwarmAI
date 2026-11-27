@@ -5,9 +5,12 @@
  *   At 1920x1080, var(--u) = 1px. Every size is written calc(N * var(--u)).
  *   The runtime may override --u on :root; never redefine it inside a scene.
  *   1px hairlines stay literal 1px. In GSAP: const u = MV.u.
- * System fonts only; no imports, no url(), no web fonts. GSAP animates transforms/opacity only;
+ * Fonts: macOS families, then the bundled faces in fonts/ (their @font-face url()s are the only font files); no imports, no other url(), no remote fonts. GSAP animates transforms/opacity only;
  * these classes set initial layout, never CSS animation or transition.
  */
+/* bundled open-licence faces (fonts/FONTS.md): used where the macOS families above them are absent */
+@font-face { font-family: "MV Noto Sans SC"; src: url("fonts/NotoSansSC.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "MV Noto Serif SC"; src: url("fonts/NotoSerifSC.woff2") format("woff2"); font-weight: 200 900; font-style: normal; font-display: block; }
 :root {
   --u: calc(min(100vw, 100vh) / 1080);
   /* palette */
@@ -21,8 +24,8 @@
   --ed-accent-75: rgba(245,165,36,.75); --ed-accent-60: rgba(245,165,36,.6);
   --ed-accent-35: rgba(245,165,36,.35); --ed-accent-18: rgba(245,165,36,.18);   /* update with the accent */
   /* fonts */
-  --ed-serif: Georgia, "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "Times New Roman", serif;
-  --ed-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif;
+  --ed-serif: Georgia, "Songti SC", "MV Noto Serif SC", "Noto Serif CJK SC", "Source Han Serif SC", SimSun, "Times New Roman", serif;
+  --ed-sans: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   /* type scale */
   --ed-fs-title: calc(180 * var(--u)); --ed-fs-brand: calc(150 * var(--u)); --ed-fs-chapter: calc(88 * var(--u));
   --ed-fs-stat: calc(124 * var(--u));      /* 124-150 */

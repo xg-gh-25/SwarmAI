@@ -33,9 +33,9 @@ Honesty over drama: half-span = largest distance of any value from the centre, b
 
 ## Type
 
-- Sans (title 700, subline and captions 400): `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif`.
-- Mono (ticks, values, kicker), 400, tabular numerals: `"SF Mono", Menlo, "PingFang SC", monospace`.
-- Handwriting (notes), 500: `"Chalkboard SE", "Bradley Hand", "Marker Felt", "Hannotate SC", "HanziPen SC", "Kaiti SC", cursive`, always with glyph jitter and grain.
+- Sans (title 700, subline and captions 400): `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`.
+- Mono (ticks, values, kicker), 400, tabular numerals: `"SF Mono", Menlo, "MV Noto Sans Mono", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", monospace`.
+- Handwriting (notes), 500: `"Chalkboard SE", "Bradley Hand", "Marker Felt", "MV Patrick Hand", "Hannotate SC", "HanziPen SC", "Kaiti SC", "MV LXGW WenKai", cursive`, always with glyph jitter and grain.
 
 | Role | Size | Details |
 |---|---|---|

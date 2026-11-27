@@ -30,7 +30,7 @@ Signal goes only to: the exception, its trail, ring and pulse, the "off grid" wo
 
 ## Type
 
-One typeface, weights 400-900 (Helvetica Neue tops out at 700): `"Helvetica Neue", -apple-system, "SF Pro Text", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif`. Flush left, ragged right; every block starts on a column line; white space is part of the layout.
+One typeface, weights 400-900 (Helvetica Neue tops out at 700): `"Helvetica Neue", -apple-system, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`. Flush left, ragged right; every block starts on a column line; white space is part of the layout.
 
 Scale (u unless noted):
 

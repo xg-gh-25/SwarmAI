@@ -2,7 +2,8 @@
 name: motion-video
 description: "Make explainer and ad videos as code-drawn animation: script, voice, HTML+GSAP scenes, frame-exact render, mix, MP4. TRIGGER: \"make a video\", \"explainer video\", \"做个视频\", \"讲解片\". NOT FOR: decks or posters (s_pollinate), editing camera footage."
 tier: lazy
-python-optional-deps: [edge_tts, playwright, numpy, PIL]
+python-deps: [boto3, PIL]
+python-optional-deps: [edge_tts, playwright, numpy, jsonschema]
 ---
 
 # Motion Video — a director, not a template
@@ -16,10 +17,41 @@ Read `INSTRUCTIONS.md` before starting. It is the workflow; the craft lives in `
 
 ## Requirements
 
-- system `python3` with `edge_tts`, `playwright` (Chromium cached), `numpy`, `PIL`
-- `ffmpeg` / `ffprobe` on PATH
-- Scripts run as `python3 "$SKILL_DIR/scripts/<name>.py" --project <dir>`;
-  `$SKILL_DIR` is this skill's base directory (shown when the skill loads).
+**One way to run every script**, on macOS, Linux and Windows:
+`"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/<name>.py" --project <dir>` (SwarmAI's own Python;
+`$SKILL_DIR` is this skill's base directory, shown when the skill loads).
+
+What that Python carries, and what each script needs beyond it:
+
+| Need | Used by | Status in SwarmAI's Python |
+|---|---|---|
+| `boto3` (Amazon Polly) | `tts.py` | bundled |
+| `PIL` (Pillow) | `check.py`, `review_evidence.py` | bundled |
+| `numpy` | `bgm.py`, `sfx.py`, `defects.py` | not declared by the backend; present today only through another package, so treat it as optional |
+| `jsonschema` | `check.py` (schema check; skipped with a warning without it) | as numpy |
+| `playwright` + its Chromium | `render.py`, `check.py` | not bundled |
+| `edge_tts` | `tts.py --engine edge` | not bundled |
+| `ffmpeg` / `ffprobe` on PATH | every audio and video step | system tool (macOS `brew install ffmpeg`, Windows `winget install Gyan.FFmpeg`, Linux the distribution's package) |
+
+A missing dependency is an environment error: the script exits 2 with one line that names it and how to get
+it (`tts.py` does this for ffmpeg/ffprobe, edge-tts and boto3). Tell the person that line; do not work
+around it.
+
+**Voice engine.** `tts.py` speaks with Amazon Polly (neural voices, word timings from speech marks) or
+edge-tts; both give the same files, timings and duration rule. Without `--engine`, the engine is the one
+the storyboard's voice name belongs to (`zh-CN-YunxiNeural` is edge-tts, `Zhiyu` / `Matthew` are Polly), so
+an existing film never changes voice. **Default for a new film: Polly when the person's AWS credentials work
+for Polly, else edge-tts.** Voice a new film the first time with `tts.py --project "$P" --engine auto`: it
+checks Polly with one small request, uses Polly's default voice for the film's language when it can (else
+the edge-tts voice), says which and why, and writes that voice name into `storyboard.json`; later runs need
+no flag. `tts.py --list-voices --engine auto` shows the choice without voicing anything.
+Polly first because it is an official service with published terms,
+the person's own AWS account (the one SwarmAI already uses for its model) and stable word timings;
+edge-tts uses an unofficial endpoint whose terms do not cover third-party clients and which has broken old
+clients before (NOTICE.md). edge-tts stays the free fallback for people without AWS credentials.
+
+**Fonts.** Every style resolves on every OS: macOS families first, then the open-licence fonts bundled in
+`references/styles/fonts/` (CJK sans, serif and Kai included), which is what Windows and Linux render.
 
 ## Verification (show evidence for each before calling the film done)
 

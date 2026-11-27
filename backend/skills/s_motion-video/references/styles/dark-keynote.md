@@ -32,9 +32,9 @@ Accent = the product: hero caret, action pill, check, the key value or ruler, a 
 
 ## Type
 
-Font stacks (system fonts only):
-- Sans (UI, titles, typed lines, big number with `tabular-nums`, captions): `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif`.
-- Mono (labels, file names, status text, ruler labels): `"SF Mono", Menlo, "PingFang SC", monospace`.
+Font stacks (macOS families first, then the bundled faces, see INDEX.md § Fonts):
+- Sans (UI, titles, typed lines, big number with `tabular-nums`, captions): `-apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`.
+- Mono (labels, file names, status text, ruler labels): `"SF Mono", Menlo, "MV Noto Sans Mono", "PingFang SC", "Hiragino Sans GB", "MV Noto Sans SC", monospace`.
 
 | Role | Size (u) | Weight / details |
 |---|---|---|
