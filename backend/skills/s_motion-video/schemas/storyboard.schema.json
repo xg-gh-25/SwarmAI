@@ -62,7 +62,11 @@
         "name": {
           "type": "string",
           "minLength": 1,
-          "description": "TTS voice name, e.g. zh-CN-YunxiNeural."
+          "description": "TTS voice name, e.g. zh-CN-YunxiNeural (edge-tts) or Zhiyu (Amazon Polly)."
+        },
+        "engine": {
+          "enum": ["edge", "polly"],
+          "description": "Voice engine; tts.py writes it when it chooses one (--engine auto). Absent = the engine the voice name belongs to."
         },
         "rate": {
           "type": "string",

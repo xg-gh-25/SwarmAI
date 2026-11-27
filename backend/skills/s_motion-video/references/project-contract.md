@@ -35,7 +35,7 @@ Every script takes `--project <dir>` and reads/writes only inside it.
   "lang": "zh-CN | en-US | ...",
   "width": 1920, "height": 1080, "fps": 30,
   "style": "exec-brief",            "method": "principle",        "mode": "explainer",
-  "voice": {"name": "zh-CN-YunxiNeural", "rate": "+0%"},
+  "voice": {"name": "zh-CN-YunxiNeural", "rate": "+0%"},   // optional "engine": "edge" | "polly" (tts.py writes it)
   "bgm": {"mood": "calm", "volume": 0.32, "seed": 7},            // or null for no music
   "captions": true,
   "target_seconds": 75,             // optional; planned length (warn +10 %, fail +20 %)

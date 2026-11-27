@@ -43,6 +43,10 @@ ALLOWED = {
         "the person names (--profile), not necessarily the SwarmAI account",
     "skills/s_pollinate/scripts/tts/backends/polly.py":
         "a skill script run in the agent's shell, as the user",
+    "skills/s_motion-video/scripts/tts.py":
+        "a skill script run in the agent's shell, as the user (Amazon Polly voice)",
+    "skills/s_motion-video/tests/test_tts_engines.py":
+        "the Polly engine's tests (a stubbed client)",
 }
 
 
