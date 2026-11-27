@@ -764,12 +764,16 @@ def _run_agent_task(job: Job, state: SchedulerState, notes: list[str]) -> JobRes
 
     - ``--tools``: the built-in tools the job declares in ``allowed_tools`` are the only
       ones it has (``--allowedTools`` only pre-approves and limits nothing in this mode;
-      measured: a job allowed only ``Read`` still ran Bash). Only the MCP servers its
+      measured: a job allowed only ``Read`` still ran Bash), never a file-writing tool
+      (``FILE_WRITE_TOOLS``, also in ``--disallowedTools``): a job writes through its
+      result, which the executor stores, or through sandboxed Bash. Only the MCP servers its
       ``mcp__<server>__…`` entries name are started; every tool of such a server is
       callable, since nothing in this mode limits within a server.
-    - ``_job_settings``: deny rules for the credential stores, the paths that run later and
-      SwarmAI's protected paths, and the CLI sandbox for Bash (writes confined, credential
-      variables unset, network per ``allow_network``). Where the sandbox cannot run, Bash
+    - ``_job_settings``: the CLI sandbox for Bash (writes only to the workspace and the
+      temp dir, credential variables unset, network per ``allow_network``), Edit denies
+      for what inside the workspace runs later and for SwarmAI's config and secrets there,
+      a second layer of denies for credential stores and protected paths, and the
+      file-writing tools denied by name. Where the sandbox cannot run, Bash
       is withheld and ``notes`` says why. ``_cli_settings_problem`` checks the settings
       with the CLI first: it drops a whole settings value it cannot parse and runs anyway.
 
@@ -842,14 +846,25 @@ def _run_agent_task(job: Job, state: SchedulerState, notes: list[str]) -> JobRes
         # Headless: nobody to ask. The limits are --tools and _job_settings (docstring).
         "--permission-mode", "bypassPermissions",
     ]
-    builtin = _builtin_tools(safety.allowed_tools)
+    declared = _builtin_tools(safety.allowed_tools)
+    builtin = [t for t in declared if t not in FILE_WRITE_TOOLS]
     if safety.allowed_tools:
         cmd.extend(["--tools", ",".join(builtin)])  # "" = no built-in tool at all
+    # No file-writing tool for a job nobody watches: headless mode has no per-path
+    # allowlist for them (measured: a path-scoped allow drops the tool in dontAsk, a
+    # root-wide deny drops it too), so only a deny list that is never complete could
+    # bound them. A job writes through its result or through sandboxed Bash.
+    withheld = list(FILE_WRITE_TOOLS)
+    dropped = [t for t in declared if t in FILE_WRITE_TOOLS]
+    if dropped:
+        notes.append(f"{', '.join(dropped)} withheld: a job writes through its result "
+                     "or through sandboxed Bash.")
     bash_possible = not safety.allowed_tools or "Bash" in builtin
     no_sandbox = _sandbox_unavailable(cli_version)
     if no_sandbox and bash_possible:
-        cmd.extend(["--disallowedTools", "Bash"])
+        withheld.append("Bash")
         notes.append(f"Bash withheld: {no_sandbox}.")
+    cmd.extend(["--disallowedTools", ",".join(withheld)])
 
     # Refuse to start a CLI that is too old for the model it was just given
     # (it may 400 — or hang — instead of running the job).
@@ -1764,19 +1779,33 @@ def _builtin_tools(allowed: "list[str]") -> "list[str]":
     return names
 
 
+#: tools no agent job gets (``_run_agent_task``)
+FILE_WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+
+
 def _job_settings(safety: "JobSafety", *, sandboxed: bool) -> dict:
     """``--settings`` of an agent job: its credentials (``_aws_settings``), deny rules no
-    mode lifts (credential stores unreadable and unwritable; paths that run later and
-    SwarmAI's protected paths unwritable, ``core.protected_paths``) and, when *sandboxed*,
+    mode lifts (the file-writing tools by name; credential stores unreadable; the
+    workspace paths that run later, SwarmAI's config and secrets there, credential stores
+    and protected paths unwritable, ``core.protected_paths``) and, when *sandboxed*,
     the CLI sandbox for Bash: writes only to the workspace and the temp dir (the deny
     rules carve their exceptions out of those), no credential variable, and
     no network unless ``allow_network`` (then any host, through the sandbox's proxy)."""
+    from config import get_swarmws  # the same workspace the deny rules name
     from core import protected_paths as pp
 
     settings = dict(_aws_settings() or {})
+    # The sandbox's write allowlist (workspace, temp dir) is what bounds Bash. Inside it,
+    # the workspace paths that run later and SwarmAI's config and secrets need an Edit
+    # deny; the fixed lists of credential stores and protected paths (startup hooks,
+    # control files) stay denied as a second layer should a CLI ever widen that
+    # allowlist. The file-writing tools are denied by name too: deny rules bind
+    # sub-agents, which --disallowedTools may not reach.
     creds = pp.credential_rules()
-    settings["permissions"] = {"deny": pp.deny_rules(
-        read=creds, edit=[*creds, *pp.runs_later_rules(), *pp.protected_write_rules()])}
+    settings["permissions"] = {"deny": [*FILE_WRITE_TOOLS, *pp.deny_rules(
+        read=creds,
+        edit=[*pp.runs_later_rules(), *pp.workspace_settings_rules(),
+              *creds, *pp.protected_write_rules()])]}
     if sandboxed:
         sandbox: dict = {
             "enabled": True,
@@ -1784,7 +1813,7 @@ def _job_settings(safety: "JobSafety", *, sandboxed: bool) -> dict:
             "autoAllowBashIfSandboxed": True,
             # not the app data dir: it holds the skill folders an owner session loads
             # and the run worktrees, which would hand a later run new code
-            "filesystem": {"allowWrite": [str(SWARMWS), tempfile.gettempdir()]},
+            "filesystem": {"allowWrite": [str(get_swarmws()), tempfile.gettempdir()]},
             "credentials": {"envVars": [
                 {"name": name, "mode": "deny"} for name in pp.CREDENTIAL_ENV_VARS]},
         }

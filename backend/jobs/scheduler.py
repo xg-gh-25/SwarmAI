@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 import yaml
 
 from .models import Feed, FeedType, Job, JobSafety, SchedulerDefaults, SchedulerState
-from .executor import execute_job, _FAILURE_ALERT_THRESHOLD
+from .executor import FILE_WRITE_TOOLS, execute_job, _FAILURE_ALERT_THRESHOLD
 from .cron_utils import is_cron_due
 from .paths import (
     STATE_FILE, CONFIG_FILE, USER_JOBS_FILE,
@@ -80,6 +80,14 @@ def _warn_retired_config_keys(job_id: str, config: dict, safety: "dict | None" =
         logger.warning(
             "Job '%s': config key(s) %s are no longer supported and are ignored",
             job_id, ", ".join(found),
+        )
+    tools = (safety or {}).get("allowed_tools") if isinstance(safety, dict) else None
+    file_tools = [t for t in (tools or []) if isinstance(t, str)
+                  and t.split("(", 1)[0].strip() in FILE_WRITE_TOOLS]
+    if file_tools:
+        logger.warning(
+            "Job '%s': %s in allowed_tools are never given to a job; it writes through "
+            "its result or through sandboxed Bash", job_id, ", ".join(file_tools),
         )
 
 

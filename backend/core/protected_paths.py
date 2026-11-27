@@ -3,12 +3,14 @@ unattended job may not read: one list, one path syntax, read by the chat setting
 builder (``prompt_builder._chat_cli_settings``) and the job executor
 (``jobs.executor._job_settings``).
 
-Why the deny rules are the mechanism: the CLI applies ``Edit(...)`` / ``Read(...)`` deny
-rules to the file tools in every permission mode, ``bypassPermissions`` and subagents
-included, and when its OS sandbox is on it merges the same rules into the sandbox's
-``denyWrite`` / ``denyRead`` (CLI 2.1.301 settings schema). So one rule set covers both
-Bash, when sandboxed, and Write/Edit/Read, always. A command's text is never consulted:
-however a write is phrased, the OS refuses it.
+Why deny rules: the CLI applies ``Edit(...)`` / ``Read(...)`` deny rules to the file
+tools in every permission mode, ``bypassPermissions`` and subagents included, and when
+its OS sandbox is on it merges the same rules into the sandbox's ``denyWrite`` /
+``denyRead`` (CLI 2.1.301 settings schema). A command's text is never consulted:
+however a write is phrased, the OS refuses it. A deny list is never complete, so where
+a session or job nobody watches could write anywhere, the bound is an allowlist instead
+(a job: no file-writing tool, and the sandbox's allowWrite for Bash); the lists here
+mark what must stay out of reach inside that allowlist, plus a fixed second layer.
 
 The lists:
 
@@ -21,11 +23,18 @@ The lists:
   jobs and non-owner channel sessions never write them. The owner's own sessions are
   watched by the owner, who may edit their dotfiles: they get ``control_rules()`` only,
   and only with the sandbox on (``prompt_builder._chat_cli_settings``).
-- ``runs_later_rules()``: what a later run executes or reads as instructions: job
-  definitions, the workspace's ``.claude`` (skills, hooks), every project's
-  ``4-capabilities``, every repository's ``.git`` in the workspace, ``.context``,
-  ``~/.claude`` and the rest of the app data dir (skill folders, worktrees, config). An
-  unattended job may not write them, so it cannot hand a later, wider run new code.
+- ``runs_later_rules()``: what a later run executes or reads as instructions, inside
+  the workspace: job definitions, the workspace's ``.claude`` (skills, hooks), every
+  project's ``4-capabilities``, every repository's ``.git``, ``.context``.
+  ``workspace_settings_rules()``: SwarmAI's config and secrets files when they sit in the
+  workspace. An unattended job may not write them, so it cannot hand a later, wider run
+  new code.
+
+How a job's writes are bounded (``jobs.executor._job_settings``): it has no file-writing
+tool, and its sandboxed Bash writes only the workspace and the temp dir, an allowlist
+the OS enforces. Inside that allowlist the two lists above are denied; the fixed
+credential and protected lists are denied too, as a second layer. Not bounded by any of
+this: what an MCP server a job names does, since it runs outside the sandbox.
 - ``CREDENTIAL_ENV_VARS``: variables a sandboxed job command must not see.
 
 Not a secret boundary: measured on CLI 2.1.301, a sandboxed Bash on macOS still reads the
@@ -38,7 +47,8 @@ A single leading ``/`` is read relative to the settings' project, and such a rul
 measured to deny nothing.
 
 Public: ``rule_path``, ``credential_rules``, ``control_rules``, ``startup_rules``,
-``protected_write_rules``, ``runs_later_rules``, ``deny_rules``, ``CREDENTIAL_ENV_VARS``.
+``protected_write_rules``, ``runs_later_rules``, ``workspace_settings_rules``,
+``deny_rules``, ``CREDENTIAL_ENV_VARS``.
 """
 from __future__ import annotations
 
@@ -144,36 +154,14 @@ def protected_write_rules() -> list[str]:
     return [*control_rules(), *startup_rules()]
 
 
-def _app_data_rules() -> list[str]:
-    """Rule paths of everything in the app data dir except the workspace: the skill
-    folders an owner session loads, run and session worktrees, MCP and notify config,
-    the stores. Listed one entry at a time, since a deny on the whole dir would also
-    cover the workspace inside it and a deny always wins over an allow."""
-    data = _data_dir()
-    ws = _workspace()
-    try:
-        ws_real = ws.resolve()
-        children = sorted(data.iterdir())
-    except OSError:
-        return []
-    if data.resolve() not in ws_real.parents:
-        return [_dir(data)]  # the workspace lives elsewhere: the whole dir is off-limits
-    out = []
-    for child in children:
-        real = child.resolve()
-        if real == ws_real or real in ws_real.parents:
-            continue
-        out.append(_dir(data / child.name) if child.is_dir() else rule_path(data / child.name))
-    return out
-
-
 def runs_later_rules() -> list[str]:
-    """Rule paths of what a later run executes or reads as instructions, which an
-    unattended job may not write: job definitions, skills and hooks, capability scripts,
-    git hooks and config of every repository in the workspace (the workspace sync runs
-    git outside any sandbox), the context files put into every later prompt, the user's
-    Claude folder, and everything in the app data dir but the workspace. The Write/Edit
-    tools obey only these deny rules (the sandbox's allowWrite binds Bash alone)."""
+    """Rule paths inside the workspace of what a later run executes or reads as
+    instructions, which an unattended job may not write: job definitions, skills and
+    hooks, capability scripts, git hooks and config of every repository in the workspace
+    (the workspace sync runs git outside any sandbox), and the context files put into
+    every later prompt. Only workspace paths: a job's Bash can write nothing outside the
+    workspace and the temp dir (the sandbox's allowWrite), and a job has no file-writing
+    tool at all (``jobs.executor``)."""
     ws = _workspace()
     return [
         _dir(ws / "Services" / "swarm-jobs"),
@@ -181,9 +169,22 @@ def runs_later_rules() -> list[str]:
         rule_path(ws / "Projects") + "/*/4-capabilities/**",
         rule_path(ws) + "/**/.git/**",
         _dir(ws / ".context"),
-        _dir(Path.home() / ".claude"),
-        *_app_data_rules(),
     ]
+
+
+def workspace_settings_rules() -> list[str]:
+    """Rule paths of SwarmAI's config and secrets files when they sit in the workspace
+    (they do by default): inside a job's writable area, so they need a rule of their own."""
+    ws = _workspace().resolve()
+    out = []
+    for path in (_config_file(), _secrets_file()):
+        try:
+            inside = ws in path.resolve().parents
+        except OSError:
+            inside = True  # cannot tell: protect it
+        if inside:
+            out.append(rule_path(path))
+    return out
 
 
 def deny_rules(*, read: Iterable[str] = (), edit: Iterable[str] = ()) -> list[str]:

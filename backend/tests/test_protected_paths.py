@@ -91,5 +91,7 @@ def test_runs_later_cover_git_and_context():
     rules = pp.runs_later_rules()
     assert pp.rule_path(ws) + "/**/.git/**" in rules  # every repo's hooks and config
     assert pp.rule_path(ws / ".context") + "/**" in rules  # read into every later prompt
+    assert all(r.startswith(pp.rule_path(ws)) for r in rules), rules  # workspace paths only
+    assert not hasattr(pp, "_app_data_rules")
     from config import get_app_data_dir
     assert pp.rule_path(Path(get_app_data_dir()) / ".env") in pp.credential_rules()

@@ -646,8 +646,9 @@ bounds and operation-time checks. They are not called non-executable.
 
 App Jobs remain unavailable to third parties until file, network, send and tool limits
 are enforced by the executor. The executor now enforces the built-in tool list
-(`--tools`), starts only the MCP servers a job names, runs Bash in the CLI sandbox (writes
-only to the workspace and the temp dir, never to credential stores, job definitions,
+(`--tools`), never gives a job a file-writing tool (a job writes through its result or
+its sandboxed Bash), starts only the MCP servers a job names, runs Bash in the CLI
+sandbox (writes only to the workspace and the temp dir, never to job definitions,
 skills, capability scripts, `.git` or `.context`), hides credential files and variables,
 and applies `allow_network`. Still open: no limit within a named MCP server, no send
 limit (`allow_write` and `allow_send` had no readers and were removed), and a sandboxed

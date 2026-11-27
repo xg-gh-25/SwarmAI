@@ -134,7 +134,9 @@ class JobSafety(BaseModel):
     ``max_budget_usd`` left in an older jobs file is ignored.)
 
     ``allowed_tools``: the built-in tools the job can call (passed as ``--tools``; empty =
-    the CLI's default set) plus any ``mcp__`` tools it may use. ``allow_network``: whether
+    the CLI's default set) plus any ``mcp__`` tools it may use. A file-writing tool
+    (Write, Edit, MultiEdit, NotebookEdit) is never given, declared or not: a job writes
+    through its result or through its sandboxed Bash. ``allow_network``: whether
     the job's sandboxed Bash may open connections. Every job's Bash runs in the CLI
     sandbox (``jobs.executor._job_settings``). ``allow_write`` / ``allow_send`` were never
     read and are gone; a jobs file that still has them loads with a warning."""

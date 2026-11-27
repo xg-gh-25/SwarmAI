@@ -114,36 +114,66 @@ def test_every_agent_task_settings_enable_sandbox():
     s = _settings(cmd)
     sb = s["sandbox"]
     assert sb["enabled"] is True and sb["allowUnsandboxedCommands"] is False
-    deny = set(s["permissions"]["deny"])
-    creds = pp.credential_rules()
-    assert {f"Read({r})" for r in creds} <= deny  # credential stores unreadable ...
-    assert {f"Edit({r})" for r in creds} <= deny  # ... and unwritable
-    assert {f"Edit({r})" for r in pp.runs_later_rules()} <= deny  # nothing that runs later
-    assert {f"Edit({r})" for r in pp.protected_write_rules()} <= deny
     import tempfile
-    from jobs.paths import SWARMWS
+    from config import get_swarmws
     # the workspace and the temp dir only: never the app data dir (skills, run worktrees)
-    assert sb["filesystem"]["allowWrite"] == [str(SWARMWS), tempfile.gettempdir()]
+    assert sb["filesystem"]["allowWrite"] == [str(get_swarmws()), tempfile.gettempdir()]
     hidden = {e["name"] for e in sb["credentials"]["envVars"] if e["mode"] == "deny"}
     assert set(pp.CREDENTIAL_ENV_VARS) <= hidden
     assert {"AWS_SECRET_ACCESS_KEY", "AWS_BEARER_TOKEN_BEDROCK", "GH_TOKEN"} <= hidden
 
 
-def test_file_tools_cannot_write_the_app_data_dir():
-    """Write/Edit obey only deny rules (the sandbox's allowWrite binds Bash alone), so a
-    job's deny list covers every entry of the app data dir but the workspace."""
+def test_file_tools_are_never_given():
+    """No job gets Write/Edit/MultiEdit/NotebookEdit, declared or not: headless mode has
+    no per-path allowlist for them, so only the sandbox's write allowlist bounds a job."""
+    file_tools = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+    result, cmd, _ = _run(_job(allowed_tools=["Read", "Write", "Edit"]))
+    assert _flag(cmd, "--tools") == "Read"
+    assert file_tools <= set(_flag(cmd, "--disallowedTools").split(","))
+    assert result.summary.startswith("Write, Edit withheld:")
+    result, cmd, _ = _run(_job())  # the CLI's default set: still none of them
+    assert file_tools <= set(_flag(cmd, "--disallowedTools").split(","))
+    assert not result.summary.startswith(("Write", "Edit"))  # nothing declared, no note
+    _, cmd, _ = _run(_job(allowed_tools=["Bash", "Read"]))
+    assert "Bash" not in _flag(cmd, "--disallowedTools").split(",")  # Bash stays where it can be sandboxed
+
+
+def test_deny_list_holds_only_workspace_paths_and_credentials(monkeypatch):
+    """With no file-writing tool, a deny rule is needed only where the sandbox's write
+    allowlist (workspace, temp dir) reaches: the workspace paths that run later and
+    SwarmAI's config and secrets there. Credentials are denied to reads."""
     from config import get_app_data_dir, get_swarmws
     data = Path(get_app_data_dir())
-    Path(get_swarmws()).mkdir(parents=True, exist_ok=True)  # the workspace is one of its entries
+    wsp = Path(get_swarmws())
+    wsp.mkdir(parents=True, exist_ok=True)
     (data / "skills" / "x").mkdir(parents=True, exist_ok=True)
-    (data / "user-mcp-servers.json").write_text("{}")
-    _, cmd, _ = _run(_job(allowed_tools=["Read", "Write"]))
-    deny = set(_settings(cmd)["permissions"]["deny"])
-    assert f"Edit({pp.rule_path(data / 'skills')}/**)" in deny
-    assert f"Edit({pp.rule_path(data / 'user-mcp-servers.json')})" in deny
-    assert "Edit(~/.claude/**)" in deny
+    # the default layout: config and secrets live in the workspace
+    monkeypatch.setattr(pp, "_config_file", lambda: wsp / "config.json")
+    monkeypatch.setattr(pp, "_secrets_file", lambda: wsp / "secrets.json")
+    _, cmd, _ = _run(_job(allowed_tools=["Bash", "Read"]))
+    deny = _settings(cmd)["permissions"]["deny"]
+    workspace_edit = {f"Edit({r})" for r in [*pp.runs_later_rules(), *pp.workspace_settings_rules()]}
+    second_layer = {f"Edit({r})" for r in [*pp.credential_rules(), *pp.protected_write_rules()]}
+    assert {r for r in deny if r.startswith("Edit(")} == workspace_edit | second_layer
+    assert {r for r in deny if r.startswith("Read(")} == {f"Read({r})" for r in pp.credential_rules()}
+    assert {"Write", "Edit", "MultiEdit", "NotebookEdit"} <= set(deny)  # by name: sub-agents too
     ws = pp.rule_path(Path(get_swarmws()))
-    assert f"Edit({ws}/**)" not in deny and f"Edit({ws})" not in deny  # the workspace stays writable
+    assert all(r[len("Edit("):].startswith(ws) for r in workspace_edit), workspace_edit
+    assert any(r.endswith("config.json)") for r in workspace_edit)
+    assert any(r.endswith("secrets.json)") for r in workspace_edit)
+    assert "Edit(~/.zshrc)" in deny  # second layer: a startup hook stays denied
+    assert not any("/skills" in r for r in deny)  # no app data enumeration
+    # the sandbox's writable workspace is the one the deny rules name, read at call time
+    import config
+    moved = wsp.parent / "MovedWS"
+    monkeypatch.setattr(config, "get_swarmws", lambda: moved)
+    _, cmd, _ = _run(_job(allowed_tools=["Bash", "Read"]))
+    s = _settings(cmd)
+    assert s["sandbox"]["filesystem"]["allowWrite"][0] == str(moved)
+    assert f"Edit({pp.rule_path(moved)}/.context/**)" in s["permissions"]["deny"]
+    # config kept outside the workspace: outside the job's writable area, no rule needed
+    monkeypatch.setattr(pp, "_config_file", lambda: data / "elsewhere" / "config.json")
+    assert not any(r.endswith("config.json") for r in pp.workspace_settings_rules())
 
 
 def test_allow_network_shapes_sandbox_network():
@@ -159,15 +189,16 @@ def test_no_sandbox_platform_withholds_bash():
                         ({"version": (2, 1, 290)}, "older than 2.1.301"),
                         ({"version": None}, "older than 2.1.301")):
         result, cmd, _ = _run(_job(allowed_tools=["Bash", "Read"]), **kwargs)
-        assert _flag(cmd, "--disallowedTools") == "Bash", kwargs
+        assert "Bash" in _flag(cmd, "--disallowedTools").split(","), kwargs
         assert "sandbox" not in _settings(cmd), kwargs
         assert result.summary.startswith("Bash withheld:") and why in result.summary, result.summary
     # a job without Bash needs no note
     result, cmd, _ = _run(_job(allowed_tools=["Read"]), system="Windows")
-    assert "--disallowedTools" not in cmd and not result.summary.startswith("Bash withheld")
+    assert "Bash" not in _flag(cmd, "--disallowedTools").split(",")
+    assert not result.summary.startswith("Bash withheld")
     # on a platform that can sandbox, Bash stays
     result, cmd, _ = _run(_job(allowed_tools=["Bash"]))
-    assert "--disallowedTools" not in cmd and result.status == "success"
+    assert "Bash" not in _flag(cmd, "--disallowedTools").split(",") and result.status == "success"
 
 
 def test_rejected_settings_fail_the_job_before_it_runs():
@@ -225,6 +256,19 @@ def test_only_named_mcp_servers_start():
         _, cmd, _ = _run(_job(allowed_tools=["Read"]), mcp=mcp)
     assert "servers" not in seen and "--mcp-config" not in cmd  # names none: none start
     assert "--strict-mcp-config" in cmd  # never the user's own MCP config
+
+
+def test_declared_file_tools_warn_at_load(tmp_path, caplog, monkeypatch):
+    from jobs import scheduler
+    jobs_file = tmp_path / "user-jobs.yaml"
+    jobs_file.write_text(
+        "jobs:\n- id: w\n  name: W\n  type: agent_task\n  schedule: 0 * * * *\n"
+        "  config: {prompt: hi}\n  safety: {allowed_tools: [Read, Write, 'Edit(src/**)']}\n")
+    monkeypatch.setattr(scheduler, "USER_JOBS_FILE", jobs_file, raising=False)
+    with caplog.at_level(logging.WARNING, logger=scheduler.logger.name):
+        scheduler.load_jobs()
+    msgs = [r.getMessage() for r in caplog.records if "'w'" in r.getMessage()]
+    assert msgs and "Write" in msgs[0] and "Edit(src/**)" in msgs[0] and "never given" in msgs[0]
 
 
 def test_retired_safety_keys_warn(tmp_path, caplog, monkeypatch):
