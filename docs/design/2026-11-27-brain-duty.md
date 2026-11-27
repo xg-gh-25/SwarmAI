@@ -3,7 +3,7 @@ title: "岗位（Duty）：让 Job 带着 Brain 干活，再升级为一个 Brai
 created: 2026-11-27
 updated: 2026-11-27
 project: SwarmAI
-status: draft r2（r1 经一次零上下文审查后改写；待 XG 定 §7）
+status: superseded by docs/design/2026-11-27-bots.md (2026-11-27): a Bot is a goal-driven agent, not an upgraded Job
 related:
   - docs/design/2026-11-09-project-agent-contract.md
   - Knowledge/Designs/2026-07-19-ddd-jobs-tools-registry-design.md（J2：job 进 Brain）
