@@ -174,10 +174,12 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.latest_version", "GET", f"{_HV}/latest-version", _PO, "read"),
     _op("hive.update", "POST", f"{_HV}/instances/{{instance_id}}/update", _PO, "change"),
     # who may log in to a Hive (hive/access.py): a key lets its holder act as the person on
-    # the Hive (§2.4 ③), so making, revoking and rotating keys are the person's
+    # the Hive (§2.4 ③), so making a key and rotating the Host's are the person's; revoking
+    # one only takes access away, so the owner agent may do it for the person. (Listing
+    # stays the person's: it shares its path with making a key, and the gate matches by path.)
     _op("hive.access.list", "GET", f"{_HV}/instances/{{instance_id}}/access", _P, "read"),
     _op("hive.access.add", "POST", f"{_HV}/instances/{{instance_id}}/access", _P, "off_machine"),
-    _op("hive.access.revoke", "DELETE", f"{_HV}/instances/{{instance_id}}/access/{{user}}", _P,
+    _op("hive.access.revoke", "DELETE", f"{_HV}/instances/{{instance_id}}/access/{{user}}", _PO,
         "change"),
     _op("hive.access.rotate_host_key", "POST", f"{_HV}/instances/{{instance_id}}/rotate-host-key",
         _P, "change"),

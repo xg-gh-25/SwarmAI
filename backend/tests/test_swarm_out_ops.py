@@ -106,13 +106,13 @@ def test_the_agents_irreversible_ops_are_exactly_the_listed_ones():
 
 def test_only_restart_widens_the_agents_hive_rights():
     """The owner agent restarts a Hive only through restart-hive (agent-limited, so a direct
-    call stays refused, and the refusal names the command); stopping, creating, deleting
-    and every change to who may log in to a Hive stay the person's, and the person keeps Stop and Start."""
+    call stays refused, and the refusal names the command); stopping, creating, deleting,
+    making a Hive login key and rotating the Host's stay the person's (revoking a key may be the agent's), and the person keeps Stop and Start."""
     by_name = {op.name: op for op in swarm_out_ops.ops()}
     restart = by_name["hive.restart"]
     assert OWNER in restart.callers and "hive.restart" in swarm_out_ops.AGENT_LIMITED
-    for name in ("hive.stop", "hive.create", "hive.delete", "hive.access.list",
-                 "hive.access.add", "hive.access.revoke", "hive.access.rotate_host_key",
+    for name in ("hive.stop", "hive.create", "hive.delete",
+                 "hive.access.add", "hive.access.rotate_host_key",
                  "hive.account.create", "hive.account.delete"):
         assert by_name[name].callers == {PERSON}, name
     assert PERSON in by_name["hive.start"].callers
@@ -121,7 +121,13 @@ def test_only_restart_widens_the_agents_hive_rights():
     hive_agent = {op.name for op in swarm_out_ops.ops()
                   if op.name.startswith("hive.") and OWNER in op.callers and op.weight != "read"}
     assert hive_agent == {"hive.restart", "hive.start", "hive.update", "hive.elastic.update",
-                          "hive.elastic.standby_round", "hive.idle_stop"}, hive_agent
+                          "hive.elastic.standby_round", "hive.idle_stop",
+                          "hive.access.revoke"}, hive_agent
+    # who may log in: the agent may revoke a key (it only takes access away); making a key,
+    # listing (same path as making one) and rotating the Host's stay the person's
+    assert OWNER in by_name["hive.access.revoke"].callers
+    for name in ("hive.access.add", "hive.access.list", "hive.access.rotate_host_key"):
+        assert by_name[name].callers == {PERSON}, name
     # one Hive's idle stop is a setting (it starts and stops nothing), set only through idle-stop
     assert "hive.idle_stop" in swarm_out_ops.AGENT_LIMITED
     by_name = {op.name: op for op in swarm_out_ops.ops()}
@@ -204,10 +210,10 @@ def test_owner_agent_ops_are_not_denied(op):
 
 
 def test_the_deny_names_the_op_and_reaches_the_hook_decision():
-    cmd = "curl -s http://127.0.0.1:18321/api/hive/instances/inst1/access"
+    cmd = "curl -s -X POST http://127.0.0.1:18321/api/hive/instances/inst1/rotate-host-key"
     d = _decide("sess-1", cmd, {"command": cmd})
     assert d is not None
-    assert "hive.access.list" in d["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "hive.access.rotate_host_key" in d["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 @pytest.mark.parametrize("cmd", [
