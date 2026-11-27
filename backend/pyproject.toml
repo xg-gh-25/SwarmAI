@@ -70,6 +70,9 @@ dependencies = [
     "send2trash>=1.8.3",
     # Library docs mounts: the text of a mounted PDF (core.library_mounts._pdf_text); pure Python, BSD-3
     "pypdf>=7.1,<8",
+    # Video narration: s_motion-video's default Chinese voice (edge-tts, LGPL-3.0, shipped unmodified as
+    # replaceable Python files; it reaches Microsoft Edge's read-aloud endpoint, see the skill's NOTICE.md)
+    "edge-tts>=7.3.1,<8",
 ]
 
 [project.optional-dependencies]

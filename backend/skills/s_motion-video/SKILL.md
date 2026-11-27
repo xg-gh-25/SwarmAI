@@ -2,8 +2,8 @@
 name: motion-video
 description: "Make explainer and ad videos as code-drawn animation: script, voice, HTML+GSAP scenes, frame-exact render, mix, MP4. TRIGGER: \"make a video\", \"explainer video\", \"做个视频\", \"讲解片\". NOT FOR: decks or posters (s_pollinate), editing camera footage."
 tier: lazy
-python-deps: [boto3, PIL]
-python-optional-deps: [edge_tts, numpy, jsonschema]
+python-deps: [boto3, PIL, edge_tts]
+python-optional-deps: [numpy, jsonschema]
 ---
 
 # Motion Video — a director, not a template
@@ -30,7 +30,7 @@ What that Python carries, and what each script needs beyond it:
 | `numpy` | `bgm.py`, `sfx.py`, `defects.py` | not declared by the backend; present today only through another package, so treat it as optional |
 | `jsonschema` | `check.py` (schema check; skipped with a warning without it) | as numpy |
 | SwarmAI's pinned browser runtime (Node, Playwright, Chromium) | `render.py`, `check.py` | installed by SwarmAI on first use (`core.feature_map.runtime`); no Python Playwright |
-| `edge_tts` | `tts.py --engine edge` | not bundled |
+| `edge_tts` | `tts.py` (the default Chinese voice, Yunxi) | bundled (LGPL-3.0, see NOTICE.md) |
 | `ffmpeg` / `ffprobe` on PATH | every audio and video step | system tool (macOS `brew install ffmpeg`, Windows `winget install Gyan.FFmpeg`, Linux the distribution's package) |
 
 A missing dependency is an environment error: the script exits 2 with one line that names it and how to get

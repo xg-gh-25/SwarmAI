@@ -24,7 +24,7 @@ def test_skill_md_states_the_runtime_contract():
     assert '"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/' in text
     assert not re.search(r'(?<![\w/.$-])python3?\s+"?\$SKILL_DIR', text), "scripts run through SwarmAI's py, not python3"
     deps, optional = frontmatter_list("python-deps"), frontmatter_list("python-optional-deps")
-    assert set(deps) == {"boto3", "PIL"} and not set(deps) & set(optional)
+    assert set(deps) == {"boto3", "PIL", "edge_tts"} and not set(deps) & set(optional)
     used = set()
     for name in os.listdir(os.path.join(SKILL, "scripts")):
         if name.endswith(".py"):

@@ -44,7 +44,9 @@ WenKai (https://github.com/lxgw/LxgwWenKai). Sources, pinned versions, sha256 an
 **edge-tts** (https://github.com/rany2/edge-tts, version 7.3.1 when read on 2026-11-27) is a Python client for
 the online text-to-speech service that Microsoft Edge's Read Aloud uses. What is known from public sources:
 - The library is LGPL-3.0 (srt_composer.py MIT) per its LICENSE and PyPI metadata
-  (https://pypi.org/project/edge-tts/). It is not bundled with SwarmAI; the skill imports it only when installed.
+  (https://pypi.org/project/edge-tts/). SwarmAI ships it (7.3.1) unmodified as ordinary Python files inside
+  the backend, so a user can replace or remove it; SwarmAI's own code only imports it. Its licence text, as
+  the package ships it: `references/licenses/edge-tts-LICENSE.txt`.
 - The service has no public API, documentation or terms of its own for third-party clients; edge-tts reaches it
   by presenting itself as the Edge browser. Its README notes that Microsoft rejects any SSML Edge itself would
   not send. The service has broken old clients before (an outdated edge-tts gets HTTP 403).

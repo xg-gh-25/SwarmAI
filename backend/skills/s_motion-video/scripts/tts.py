@@ -456,8 +456,8 @@ class UsageError(Exception):
     pass
 
 
-EDGE_MISSING = ("edge-tts is not installed in this Python (SwarmAI's bundled Python does not carry it): use --engine polly "
-                "with AWS credentials, or run tts.py with a Python that has it (python3 -m pip install -U edge-tts)")
+EDGE_MISSING = ("edge-tts is not installed in this Python (SwarmAI's own Python carries it: run tts.py with "
+                "\"$SWARM_BACKEND_BIN\" py), or use --engine polly")
 BOTO3_MISSING = ("boto3 is not installed in this Python: run tts.py with SwarmAI's Python (\"$SWARM_BACKEND_BIN\" py), "
                  "which carries it, or python3 -m pip install boto3")
 
