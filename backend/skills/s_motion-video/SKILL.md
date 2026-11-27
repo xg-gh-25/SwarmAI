@@ -37,18 +37,17 @@ A missing dependency is an environment error: the script exits 2 with one line t
 it (`tts.py` does this for ffmpeg/ffprobe, edge-tts and boto3). Tell the person that line; do not work
 around it.
 
-**Voice engine.** `tts.py` speaks with Amazon Polly (neural voices, word timings from speech marks) or
-edge-tts; both give the same files, timings and duration rule. Without `--engine`, the engine is the one
-the storyboard's voice name belongs to (`zh-CN-YunxiNeural` is edge-tts, `Zhiyu` / `Matthew` are Polly), so
-an existing film never changes voice. **Default for a new film: Polly when the person's AWS credentials work
-for Polly, else edge-tts.** Voice a new film the first time with `tts.py --project "$P" --engine auto`: it
-checks Polly with one small request, uses Polly's default voice for the film's language when it can (else
-the edge-tts voice), says which and why, and writes that voice name into `storyboard.json`; later runs need
-no flag. `tts.py --list-voices --engine auto` shows the choice without voicing anything.
-Polly first because it is an official service with published terms,
-the person's own AWS account (the one SwarmAI already uses for its model) and stable word timings;
-edge-tts uses an unofficial endpoint whose terms do not cover third-party clients and which has broken old
-clients before (NOTICE.md). edge-tts stays the free fallback for people without AWS credentials.
+**Voice engine.** `tts.py` speaks with edge-tts or Amazon Polly (neural voices, word timings from speech
+marks); both give the same files, timings and duration rule. Without `--engine`, the engine is the one the
+storyboard's voice name belongs to (`zh-CN-YunxiNeural` is edge-tts, `Zhiyu` / `Matthew` are Polly), so an
+existing film never changes voice. **Default for a new film:** a Chinese film speaks with edge-tts's Yunxi;
+another language takes Polly when the person's AWS credentials work for it, else edge-tts. Voice a new film the
+first time with `tts.py --project "$P" --engine auto`; it says which engine and why and writes the voice into
+`storyboard.json`, so later runs need no flag. **When edge-tts fails** (its endpoint rejects the client, the
+network is down, it is not installed) and no `--engine` was given, the whole film is voiced again with Polly's
+default voice for its language, never only the failed scenes, and the storyboard records the Polly voice; say
+so to the person. edge-tts uses an unofficial endpoint whose terms do not cover third-party clients (NOTICE.md),
+which is why Polly, an official service on the person's own AWS account, is the fallback.
 
 **Fonts.** Every style resolves on every OS: macOS families first, then the open-licence fonts bundled in
 `references/styles/fonts/` (CJK sans, serif and Kai included), which is what Windows and Linux render.

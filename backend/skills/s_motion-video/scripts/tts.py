@@ -15,8 +15,11 @@ Engines (same outputs, same rules):
          speech marks of type "word" (a word ends where the next starts, the last at the end of speech).
 Which one: --engine edge|polly, else storyboard voice.engine, else the engine voice.name belongs to (a hyphenated
 name such as zh-CN-YunxiNeural is an edge-tts voice, a single word such as Zhiyu is a Polly voice), else auto:
-Polly when AWS credentials, a region and one small Polly request succeed, else edge (printed with the reason).
---engine auto forces that choice. When the chosen engine does not own voice.name, the engine's default voice for
+a Chinese film speaks with edge-tts (Yunxi) when edge-tts is installed; any other language takes Polly when AWS
+credentials, a region and one small Polly request succeed, else edge (printed with the reason).
+--engine auto forces that choice. Fallback: when edge-tts fails (an HTTP 403 from the endpoint, the network, not
+installed) and the engine was not named with --engine (and no --scene), the whole film is voiced again with Polly's
+default voice for its language, and storyboard.json records the Polly voice, so the film keeps one voice. When the chosen engine does not own voice.name, the engine's default voice for
 storyboard.lang is used and written back to storyboard.json, so later runs stay on the same engine.
 
 Width unit for captions: a CJK / full-width character counts 1, any other character 0.5, so the
@@ -293,8 +296,10 @@ def default_voice(engine, lang):
     return None
 
 
-def resolve_engine(flag, vcfg, probe):
-    """-> (engine, reason). flag: None, "auto", "edge" or "polly"; vcfg: storyboard voice; probe() -> (ok, why)."""
+def resolve_engine(flag, vcfg, probe, lang=None, edge_ok=lambda: edge_available()):
+    """-> (engine, reason). flag: None, "auto", "edge" or "polly"; vcfg: storyboard voice; probe() -> (ok, why).
+    auto: a Chinese film speaks with edge-tts (its Yunxi voice) whenever edge-tts is installed, and run() moves the
+    whole film to Polly if edge-tts then fails; any other language takes Polly when probe() says it works, else edge."""
     if flag in ENGINES:
         return flag, f"--engine {flag}"
     if flag != "auto":
@@ -306,6 +311,8 @@ def resolve_engine(flag, vcfg, probe):
         name = vcfg.get("name")
         if name:
             return voice_engine(name), f"voice.name {name} is {_engine_of(name)} voice"
+    if str(lang or "").startswith("zh") and edge_ok():
+        return "edge", "auto: a Chinese film defaults to edge-tts (Yunxi); Polly takes over if edge-tts fails"
     ok, why = probe()
     return ("polly" if ok else "edge"), f"auto: {why}"
 
@@ -635,10 +642,13 @@ async def run(a):
     if not isinstance(vcfg, dict):
         die("storyboard voice must be an object {\"name\", \"rate\"}")
     sb["voice"] = vcfg   # a null voice becomes the object tts.py writes the chosen voice into
-    engine, why = resolve_engine(a.engine, vcfg, lambda: polly_probe(lang))
+    engine, why = resolve_engine(a.engine, vcfg, lambda: polly_probe(lang), lang)
     voice, voice_changed = pick_voice(engine, vcfg, lang, a.engine)
     print(f"engine: {engine} ({why}), voice {voice}"
           + (f" (was {vcfg.get('name')}, not a {engine} voice)" if voice_changed and vcfg.get("name") else ""))
+    # edge-tts is an unofficial endpoint (NOTICE.md): when it fails and the engine was not named on the command line,
+    # the whole film is voiced again with Polly, never only the failed scenes, so the film keeps one voice
+    may_fall_back, fell_back = engine == "edge" and a.engine not in ENGINES and not a.scene, False
     rate = str(vcfg.get("rate") or "+0%")
     if not re.fullmatch(r"[+-]\d{1,3}%", rate):
         die(f"voice.rate must look like +0% or -10%, got {rate!r}")
@@ -654,47 +664,71 @@ async def run(a):
     vdir = os.path.join(proj, "audio", "voice")
     os.makedirs(vdir, exist_ok=True)
 
-    jobs, plans = [], []
-    for s in scenes:
-        sid = str(s.get("id"))
-        text = strip_markup(str(s.get("narration") or ""))
-        if not text:
-            continue
-        spoken, s2o = apply_pronounce(text, pron)
-        h = tts_hash(text, spoken, voice, rate, engine)
-        base = os.path.join(vdir, sid)
-        p = {"scene": s, "id": sid, "text": text, "spoken": spoken, "s2o": s2o, "hash": h, "mp3": base + ".mp3",
-             "meta": base + ".tts.json", "selected": not a.scene or a.scene == sid}
-        plans.append(p)
-        old = load_json(p["meta"], {}) or {}
-        if not p["selected"]:
-            if old and (old.get("voice") != voice or old.get("engine", "edge") != engine):
-                print(f"{sid}: warning: voiced with {old.get('engine', 'edge')} {old.get('voice')}, not {engine} {voice}: "
-                      f"run tts.py without --scene so the film keeps one voice", file=sys.stderr)
-            continue
-        if not a.force and old.get("hash") == h and os.path.isfile(p["mp3"]) and old.get("boundaries"):
-            p["cache"], p["reused"] = old, True
-        else:
-            jobs.append(p)
-        p["voice"], p["rate"], p["lang"] = voice, rate, lang
+    def plan(engine, voice):
+        jobs, plans = [], []
+        for s in scenes:
+            sid = str(s.get("id"))
+            text = strip_markup(str(s.get("narration") or ""))
+            if not text:
+                continue
+            spoken, s2o = apply_pronounce(text, pron)
+            h = tts_hash(text, spoken, voice, rate, engine)
+            base = os.path.join(vdir, sid)
+            p = {"scene": s, "id": sid, "text": text, "spoken": spoken, "s2o": s2o, "hash": h, "mp3": base + ".mp3",
+                 "meta": base + ".tts.json", "selected": not a.scene or a.scene == sid}
+            plans.append(p)
+            old = load_json(p["meta"], {}) or {}
+            if not p["selected"]:
+                if old and (old.get("voice") != voice or old.get("engine", "edge") != engine):
+                    print(f"{sid}: warning: voiced with {old.get('engine', 'edge')} {old.get('voice')}, not {engine} {voice}: "
+                          f"run tts.py without --scene so the film keeps one voice", file=sys.stderr)
+                continue
+            if not a.force and old.get("hash") == h and os.path.isfile(p["mp3"]) and old.get("boundaries"):
+                p["cache"], p["reused"] = old, True
+            else:
+                jobs.append(p)
+            p["voice"], p["rate"], p["lang"] = voice, rate, lang
+        return jobs, plans
 
-    sem = asyncio.Semaphore(LANES)
-    if jobs and engine == "edge":
-        if not edge_available():
-            raise EnvError(EDGE_MISSING + (f" [{why}]" if why.startswith("auto") else ""))
-        coros = [voice_scene(j, sem) for j in jobs]
-    elif jobs:
-        client = polly_client()
-        coros = [voice_scene_polly(j, sem, client) for j in jobs]
-    else:
-        coros = []
-    results = await asyncio.gather(*coros, return_exceptions=True)
-    failed = []
-    for j, r in zip(jobs, results):
-        if isinstance(r, BaseException):
-            failed.append((j["id"], str(r)))
-            continue
-        j["cache"], j["reused"] = r, False
+    async def voice_all(jobs, engine):
+        """-> [(scene id, error)]; each voiced job gets its cache"""
+        sem = asyncio.Semaphore(LANES)
+        if jobs and engine == "edge":
+            if not edge_available():
+                return [(j["id"], EDGE_MISSING) for j in jobs]
+            coros = [voice_scene(j, sem) for j in jobs]
+        elif jobs:
+            client = polly_client()
+            coros = [voice_scene_polly(j, sem, client) for j in jobs]
+        else:
+            coros = []
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        failed = []
+        for j, r in zip(jobs, results):
+            if isinstance(r, BaseException):
+                failed.append((j["id"], str(r)))
+                continue
+            j["cache"], j["reused"] = r, False
+        return failed
+
+    jobs, plans = plan(engine, voice)
+    failed = await voice_all(jobs, engine)
+    if failed and may_fall_back:
+        ok, pwhy = polly_probe(lang)
+        fallback = default_voice("polly", lang) if ok else None
+        if fallback:
+            print(f"warning: edge-tts failed ({failed[0][1][:200]}): the whole film is voiced again with Polly "
+                  f"{fallback} (was {voice}) so it keeps one voice; to go back: tts.py --engine edge --force",
+                  file=sys.stderr)
+            engine, voice, voice_changed, fell_back = "polly", fallback, True, True
+            jobs, plans = plan(engine, voice)
+            failed = await voice_all(jobs, engine)
+        elif failed and all(err == EDGE_MISSING for _, err in failed):   # nothing voiced: one environment line, exit 2
+            raise EnvError(f"{EDGE_MISSING}; Polly could not take over: {pwhy}")
+        else:
+            print(f"edge-tts failed and Polly cannot take over: {pwhy}", file=sys.stderr)
+    if failed and all(err == EDGE_MISSING for _, err in failed):
+        raise EnvError(EDGE_MISSING + (f" [{why}]" if why.startswith("auto") else ""))
 
     changed, narration_total = 0, 0.0
     for p in plans:
@@ -729,7 +763,7 @@ async def run(a):
     if voice_changed and not failed:   # the film now speaks with this engine's voice: later runs infer the same engine
         old_name = vcfg.get("name")
         vcfg["name"] = voice
-        if "engine" in vcfg:
+        if "engine" in vcfg or fell_back:
             vcfg["engine"] = engine
         print(f"storyboard.json: voice.name {old_name or '(none)'} -> {voice} ({engine})")
     if changed or (voice_changed and not failed):

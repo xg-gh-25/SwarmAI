@@ -59,8 +59,11 @@ the online text-to-speech service that Microsoft Edge's Read Aloud uses. What is
   that a third-party client emulating Edge is not authorised. Use it for personal, non-commercial work at the
   person's own risk; for a product, a commercial film or anything published, use an official service: Amazon
   Polly (below), or Microsoft's own paid Azure AI Speech, which serves the same neural voices under its terms
-  (https://learn.microsoft.com/azure/ai-services/speech-service/). This is why Polly is the default engine
-  whenever the person's AWS credentials can use it.
+  (https://learn.microsoft.com/azure/ai-services/speech-service/).
+- Choice made for this skill (2026-11-27): a Chinese film still defaults to edge-tts's Yunxi voice, and the
+  person running it carries the risk above; when edge-tts fails, tts.py voices the whole film with Amazon
+  Polly instead. Anyone publishing a film, or shipping this skill in a paid product, should voice it with
+  Polly (`--engine polly`) or Azure AI Speech.
 
 **Amazon Polly** (https://aws.amazon.com/polly/) is called through boto3 with the person's own AWS credentials
 and is billed to their account per character (two requests per scene: audio and word speech marks). Under the

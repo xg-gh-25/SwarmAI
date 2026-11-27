@@ -123,6 +123,7 @@ def _write_storyboard(d, voice, narrations=("大家好，今天讲 SQL 数据库
 def test_missing_dependency_exits_2_with_one_line(tmp_path, monkeypatch, capsys):
     _write_storyboard(str(tmp_path), {"name": "zh-CN-YunxiNeural"})
     monkeypatch.setitem(sys.modules, "edge_tts", None)          # import edge_tts -> ImportError
+    monkeypatch.setattr(tts, "polly_probe", lambda lang: (False, "no AWS credentials found"))   # no fallback either
     code, err = _main(monkeypatch, capsys, ["--project", str(tmp_path)])
     assert code == 2 and err.count("\n") == 1 and "edge-tts" in err and "--engine polly" in err
 
@@ -338,3 +339,65 @@ def test_null_voice_gets_the_chosen_voice_written_back(tmp_path, monkeypatch):
     assert asyncio.run(tts.run(_ns(proj))) == 0
     sb = json.load(open(os.path.join(proj, "storyboard.json"), encoding="utf-8"))
     assert sb["voice"] == {"name": "zh-CN-YunxiNeural"} and all(s["duration"] for s in sb["scenes"])
+
+
+# ---------- Chinese default and the edge -> Polly fallback ----------
+
+def test_auto_keeps_chinese_on_edge_and_other_languages_on_polly():
+    ok = lambda: (True, "ok")   # noqa: E731
+    assert tts.resolve_engine(None, {}, ok, "zh-CN", edge_ok=lambda: True)[0] == "edge"
+    assert tts.resolve_engine("auto", {}, ok, "zh-CN", edge_ok=lambda: True)[0] == "edge"
+    assert tts.resolve_engine(None, {}, ok, "zh-CN", edge_ok=lambda: False)[0] == "polly"   # no edge-tts: Polly
+    assert tts.resolve_engine(None, {}, ok, "en-US", edge_ok=lambda: True)[0] == "polly"
+    assert tts.resolve_engine("polly", {}, ok, "zh-CN", edge_ok=lambda: True)[0] == "polly"
+
+
+def _edge_403(audio):
+    class Rejected(Exception):
+        status = 403
+
+    class Communicate:
+        def __init__(self, text, voice, rate="+0%", boundary="WordBoundary"):
+            pass
+
+        async def stream(self):
+            raise Rejected("Invalid response status")
+            yield  # noqa: B901 (an async generator)
+    return types.SimpleNamespace(Communicate=Communicate, __version__="test")
+
+
+@needs_ffmpeg
+def test_edge_failure_voices_the_whole_film_with_polly(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(tts, "LANES", 1)
+    audio = _mp3(tmp_path / "voice.mp3")
+    spoken = [("S01", "大家好，今天讲 sequel 数据库。"), ("S02", "检索快、成本低。")]
+    proj = tmp_path / "p"
+    proj.mkdir()
+    _write_storyboard(str(proj), {"name": "zh-CN-YunxiNeural"})
+    monkeypatch.setitem(sys.modules, "edge_tts", _edge_403(audio))
+    client = _polly_client()
+    stub = _stub_polly(client, audio, spoken)
+    monkeypatch.setattr(tts, "polly_client", lambda region=None: client)
+    monkeypatch.setattr(tts, "polly_probe", lambda lang: (True, "ok"))
+    assert asyncio.run(tts.run(_ns(proj))) == 0
+    stub.assert_no_pending_responses()
+    assert "voiced again with Polly Zhiyu" in capsys.readouterr().err
+    sb = json.load(open(os.path.join(proj, "storyboard.json"), encoding="utf-8"))
+    assert sb["voice"]["name"] == "Zhiyu" and sb["voice"]["engine"] == "polly"
+    for sid, _ in spoken:
+        meta = json.load(open(os.path.join(proj, "audio", "voice", sid + ".tts.json"), encoding="utf-8"))
+        assert meta["engine"] == "polly" and meta["voice"] == "Zhiyu"
+
+
+@needs_ffmpeg
+def test_a_named_engine_does_not_fall_back(tmp_path, monkeypatch):
+    audio = _mp3(tmp_path / "voice.mp3")
+    proj = tmp_path / "p"
+    proj.mkdir()
+    _write_storyboard(str(proj), {"name": "zh-CN-YunxiNeural"})
+    monkeypatch.setitem(sys.modules, "edge_tts", _edge_403(audio))
+    monkeypatch.setattr(tts, "polly_probe", lambda lang: (True, "ok"))
+    monkeypatch.setattr(tts, "polly_client", lambda region=None: pytest.fail("Polly must not be called"))
+    assert asyncio.run(tts.run(_ns(proj, "edge"))) == 2
+    sb = json.load(open(os.path.join(proj, "storyboard.json"), encoding="utf-8"))
+    assert sb["voice"] == {"name": "zh-CN-YunxiNeural"}
