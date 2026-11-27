@@ -270,7 +270,7 @@ with, and why it is a new axis. A row reaches the dashboard only with its count 
 Checked filled; the user's accept / reject replaces Count with `✔ ACCEPTED <date>` /
 `✖ REJECTED <date>`, and the row is never proposed again. Accepting does not write the rule:
 run PROMOTE with the user. For an accepted row with anchors, the north star detail
-(`python -m scripts.north_star`) shows the repeats of its mistake in the days since acceptance
+(`"$SWARM_BACKEND_BIN" py -m scripts.north_star`) shows the repeats of its mistake in the days since acceptance
 and in as many days before: whether the rule worked.
 
 ---
