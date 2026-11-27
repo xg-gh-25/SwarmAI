@@ -345,7 +345,10 @@ export const hiveService = {
   // ── SSH machines (backend routers/hive.py /ssh; design 2026-11-24-swarm-out-ssh-machine §8) ──
   async listSsh(): Promise<SshMachine[]> {
     const { data } = await api.get('/hive/ssh');
-    return Array.isArray(data?.machines) ? data.machines : [];
+    const host = typeof data?.host_cert_valid_until === 'number' ? data.host_cert_valid_until : null;
+    return Array.isArray(data?.machines)
+      ? data.machines.map((m: SshMachine) => ({ ...m, host_cert_valid_until: host }))
+      : [];
   },
   async addSsh(body: SshMachineAdd): Promise<void> {
     await api.post('/hive/ssh', body);
@@ -353,7 +356,7 @@ export const hiveService = {
   async retrySsh(id: string): Promise<void> {
     await api.post(`/hive/ssh/${id}/retry`);
   },
-  async setSshOptions(id: string, body: { general_tasks?: boolean; reaches_private?: boolean; cert_renew_hint?: string }): Promise<void> {
+  async setSshOptions(id: string, body: { general_tasks?: boolean; reaches_private?: boolean; cert_renew_hint?: string; login_renew_hint?: string }): Promise<void> {
     await api.patch(`/hive/ssh/${id}`, body);
   },
   async removeSsh(id: string): Promise<{ left: string[]; data_kept: string }> {
@@ -379,6 +382,9 @@ export interface SshMachine {
     /** the mounts are the machine's own top-level directories, found at each install and update */
     mounts_auto: boolean | null;
     cert_renew_hint: string | null;
+    /** the command that renews THIS computer's login certificate (typed into the App's
+     *  terminal here, never sent over ssh) */
+    login_renew_hint?: string | null;
     /** 'rolesanywhere' once the machine has its own AWS identity; null before (installed on a
      *  profile of the person's, it moves at its next update) */
     identity: string | null;
@@ -393,6 +399,9 @@ export interface SshMachine {
   cert_valid_until: number | null;
   /** ssh's last line when its tunnel could not be built */
   tunnel_error: string;
+  /** THIS computer's latest SSH certificate's end (Unix seconds), the one ssh logs in to the
+   *  machine with; the same on every machine; null when this computer has none */
+  host_cert_valid_until?: number | null;
 }
 
 /** Adding a machine: only its host is needed; the install gives it its own AWS identity and

@@ -1357,13 +1357,15 @@ class SshMachineOptions(BaseModel):
     general_tasks: Optional[bool] = None
     reaches_private: Optional[bool] = None
     cert_renew_hint: Optional[str] = Field(default=None, max_length=120)
+    login_renew_hint: Optional[str] = Field(default=None, max_length=120)
 
 
 #: the settings shown for a machine (never its Hive password)
 #: and its own AWS identity: ``identity`` (none until it has one), its certificate's end
 #: ``not_after`` and why its last renewal failed (``renew_error``)
 _SSH_SHOWN = ("ssh_host", "remote_port", "local_port", "reaches_private", "general_tasks", "mounts",
-              "mounts_auto", "cert_renew_hint", "identity", "not_after", "renew_error")
+              "mounts_auto", "cert_renew_hint", "login_renew_hint", "identity", "not_after",
+              "renew_error")
 
 
 async def _ssh_rows() -> list[dict]:
@@ -1380,8 +1382,11 @@ async def ssh_machines():
     on a machine: one never probed, or whose last answer is older than PROBE_FRESH_S (a missing
     answer, or a tunnel still starting: PROBE_RETRY_S), is probed again in the background. A
     machine never probed, or whose tunnel was still starting, is not known yet (reachable
-    None)."""
+    None). ``host_cert_valid_until``: the end of THIS computer's latest SSH certificate
+    (``~/.ssh/*-cert.pub``, the one ssh logs in to a machine with), or None when it has none:
+    a login certificate that ended is why a machine stops answering."""
     _require_desktop()
+    from core import hive_ssh_mode
     from core.carriers import ssh as ssh_carrier
     from core.carriers import ssh_tunnel
     out = []
@@ -1405,7 +1410,8 @@ async def ssh_machines():
                     item["tunnel_error"] = ssh_tunnel.last_error(r["id"])
                 item.update(reachable=probe is not None, cert_valid_until=(probe or {}).get("cert_valid_until"))
         out.append(item)
-    return {"machines": out}
+    host_cert = await asyncio.to_thread(hive_ssh_mode.cert_valid_until) if out else None
+    return {"machines": out, "host_cert_valid_until": host_cert}
 
 
 def _ssh_error(exc: Exception) -> HTTPException:
@@ -1467,7 +1473,7 @@ async def ssh_options(machine_id: str, body: SshMachineOptions):
     from hive import ssh_provisioner
     try:
         cfg = await ssh_provisioner.set_options(machine_id, body.general_tasks, body.reaches_private,
-                                                body.cert_renew_hint)
+                                                body.cert_renew_hint, body.login_renew_hint)
     except ssh_provisioner.SshInstallError:
         raise HTTPException(status_code=404, detail="SSH machine not found") from None
     except Exception as exc:  # noqa: BLE001

@@ -161,11 +161,29 @@ function residentTone(h: HiveInstance, fleet: SwarmOutFleet | null): { tone: Ton
   return { tone: f?.saturated ? 'attention' : 'ok', word: hiveStatusLabel(h.status) };
 }
 
+/** ssh's own words when it refused this computer's login (key or certificate not accepted). */
+const LOGIN_REFUSED = /permission denied|publickey|certificate/i;
+
+/** This computer's own SSH certificate (the one ssh logs in to the machine with) has ended,
+ *  the machine does not answer, and ssh says the login was refused: why it disconnected, and
+ *  what to renew. Any other outage (the Hive down, a network error) is not blamed on it, and
+ *  neither is a machine not probed yet: a computer may hold an unrelated old certificate. */
+export const hostCertEnded = (m: SshMachine, now: number) =>
+  m.status === 'running' && m.reachable === false && LOGIN_REFUSED.test(m.tunnel_error ?? '')
+  && typeof m.host_cert_valid_until === 'number' && m.host_cert_valid_until * 1000 <= now;
+
+/** How long before this computer's certificate ends the row says so. */
+const HOST_CERT_WARN_S = 3600;
+
 /** An SSH machine's tone and state word (design 2026-11-24-swarm-out-ssh-machine §8). */
+
 export function sshTone(m: SshMachine, now: number, t: (k: string, o?: Record<string, unknown>) => string): { tone: Tone; word: string } {
   if (m.status === 'error' || m.status === 'failed') return { tone: 'error', word: hiveStatusLabel(m.status) };
   if (m.status !== 'running') return { tone: CHANGING.includes(m.status) ? 'attention' : 'unknown', word: hiveStatusLabel(m.status) };
   if (typeof m.cert_valid_until === 'number' && m.cert_valid_until * 1000 <= now) return { tone: 'error', word: t('swarmOut.ssh.certExpired') };
+  // this computer cannot log in: its own certificate ended (only said while the machine does
+  // not answer: a computer may hold an unrelated old certificate)
+  if (hostCertEnded(m, now)) return { tone: 'error', word: t('swarmOut.ssh.hostCertExpired') };
   if (m.reachable === false) return { tone: 'error', word: t('swarmOut.fleet.unreachable') };
   return { tone: m.reachable ? 'ok' : 'unknown', word: hiveStatusLabel(m.status) };
 }
@@ -243,7 +261,26 @@ export function SshMachinesSection({ onError, onMachines, adding: addingProp, on
   const isExpired = (m: SshMachine) => typeof m.cert_valid_until === 'number' && m.cert_valid_until * 1000 <= now;
   // a renewal started here and not seen yet: the machine's next probe (within about half a
   // minute) shows the new certificate, so the rows are read every few seconds for a while
-  const watching = (machines ?? []).some((m) => renewing[m.id] != null && isExpired(m) && now - renewing[m.id] < RENEW_WATCH_MS);
+  // the login renewal (this computer's certificate) is kept under its own key: the two
+  // renewals never show each other's "started"
+  const loginKey = (id: string) => `${id}:login`;
+  // a renewal counts as started for RENEW_WATCH_MS: a certificate that ends again later
+  // (hours after a renewal that worked) shows its renew button, never an old "started"
+  const startedHere = (key: string) => renewing[key] != null && now - renewing[key] < RENEW_WATCH_MS;
+  const watching = (machines ?? []).some((m) =>
+    (startedHere(m.id) && isExpired(m)) || (startedHere(loginKey(m.id)) && hostCertEnded(m, now)));
+  // the command that renews this computer's login certificate, being set for a machine
+  const [loginHintFor, setLoginHintFor] = useState<{ id: string; text: string } | null>(null);
+  const startLoginRenew = (m: SshMachine) => {
+    const command = (m.config.login_renew_hint ?? '').trim();
+    if (!command) return;
+    if (!isDesktop()) {               // no terminal here: the command to run, copied
+      void copyToClipboard(command).then((ok) => { if (ok) { setCopiedId(m.id); window.setTimeout(() => setCopiedId(null), 1500); } });
+      return;
+    }
+    runInTerminal(command, t('swarmOut.ssh.thisComputer'));   // on this computer, never over ssh
+    setRenewing((r) => ({ ...r, [loginKey(m.id)]: Date.now() }));
+  };
   useEffect(() => {
     if (!changing && !unknown && !watching) return undefined;
     const timer = setInterval(() => { void load(); }, unknown || watching ? 3000 : 10000);
@@ -296,10 +333,59 @@ export function SshMachinesSection({ onError, onMachines, adding: addingProp, on
                 <button type="button" className="btn-sm border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50" disabled={busy}
                   data-testid="so-ssh-retry" onClick={(ev) => { ev.stopPropagation(); void act(() => hiveService.retrySsh(m.id)); }}>{t('common.button.retry')}</button>
               ) : undefined} />
+            {/* this computer cannot log in (its certificate ended), or will soon: renew it here */}
+            {(() => {
+              const end = m.host_cert_valid_until;
+              const ended = hostCertEnded(m, now);
+              const soon = !ended && m.status === 'running' && m.reachable === true && typeof end === 'number'
+                && end * 1000 > now && end * 1000 - now < HOST_CERT_WARN_S * 1000;
+              if (!ended && !soon) return null;
+              const hint = (m.config.login_renew_hint ?? '').trim();
+              const started = startedHere(loginKey(m.id));
+              const tone = ended ? TONE_VAR.error : TONE_VAR.attention;
+              return (
+                <div className={`${detailPad(compact)} pr-[18px] pb-3 -mt-1 text-small flex flex-col gap-2`} data-testid="so-ssh-host-cert">
+                  <div style={{ color: tone }} data-testid="so-ssh-host-cert-note">
+                    {ended ? t('swarmOut.ssh.hostCertEnded', { time: clock(end as number) })
+                      : t('swarmOut.ssh.hostCertEnds', { time: clock(end as number) })}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                    {hint && (
+                      <button type="button" className={started ? 'btn-sm border border-[var(--color-border)] hover:bg-[var(--color-hover)]' : 'btn-sm btn-primary'}
+                        data-testid="so-ssh-host-renew" title={hint} onClick={() => startLoginRenew(m)}>
+                        {!isDesktop() ? (copiedId === m.id ? t('swarmOut.setup.copied') : t('swarmOut.ssh.renewCopy'))
+                          : t('swarmOut.ssh.renewInTerminal')}
+                      </button>
+                    )}
+                    {started && ended && (
+                      <button type="button" className="btn-sm btn-primary" data-testid="so-ssh-host-check" onClick={() => void load()}>
+                        {t('swarmOut.ssh.checkAgain')}</button>
+                    )}
+                    {loginHintFor?.id !== m.id && (
+                      <button type="button" className={`text-small ${link}`} data-testid="so-ssh-login-hint-set"
+                        onClick={() => setLoginHintFor({ id: m.id, text: hint })}>
+                        {hint ? t('swarmOut.ssh.loginHintChange') : t('swarmOut.ssh.loginHintSet')}</button>
+                    )}
+                  </div>
+                  {started && ended && <div className={muted} data-testid="so-ssh-host-renew-started">{t('swarmOut.ssh.hostRenewStarted')}</div>}
+                  {loginHintFor?.id === m.id && (
+                    <div className="flex flex-wrap items-center gap-2 max-w-[520px]" data-testid="so-ssh-login-hint-form">
+                      <input className={`${input} flex-1 min-w-[180px] font-mono`} value={loginHintFor.text} maxLength={120} autoFocus
+                        placeholder={t('swarmOut.ssh.loginHintPlaceholder')} aria-label={t('swarmOut.ssh.loginHintLabel')} data-testid="so-ssh-login-hint"
+                        onChange={(ev) => setLoginHintFor({ id: m.id, text: ev.target.value })} />
+                      <button type="button" className="btn-sm btn-primary disabled:opacity-50" disabled={busy || !loginHintFor.text.trim()} data-testid="so-ssh-login-hint-save"
+                        onClick={() => void act(async () => { await hiveService.setSshOptions(m.id, { login_renew_hint: loginHintFor.text.trim() }); setLoginHintFor(null); })}>
+                        {t('swarmOut.ssh.hintSave')}</button>
+                      <button type="button" className={link} onClick={() => setLoginHintFor(null)}>{t('swarmOut.setup.cancel')}</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             {/* the one thing to do, without opening the row, and the way to do it from here */}
             {expired && (() => {
               const hint = (m.config.cert_renew_hint ?? '').trim();
-              const started = renewing[m.id] != null;
+              const started = startedHere(m.id);
               return (
                 <div className={`${detailPad(compact)} pr-[18px] pb-3 -mt-1 text-small flex flex-col gap-2`} data-testid="so-ssh-renew-box">
                   <div style={{ color: TONE_VAR.error }} data-testid="so-ssh-renew">

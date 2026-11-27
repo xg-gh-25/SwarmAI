@@ -2206,7 +2206,16 @@
       "hintLabel": "在机器上刷新 SSH 证书的命令",
       "hintPlaceholder": "在机器上运行、用来续证书的那条命令",
       "hintSave": "保存",
-      "deleteNote": "移除 {{name}}？会把 Hive 从机器上卸掉，它的数据留在机器上。"
+      "deleteNote": "移除 {{name}}？会把 Hive 从机器上卸掉，它的数据留在机器上。",
+      "hostCertExpired": "本机证书已过期",
+      "hostCertEnded": "本机的 SSH 证书在 {{time}} 到期，登录不了这台机器。在这里续上后，大约半分钟内会自己重新连上。",
+      "hostCertEnds": "本机的 SSH 证书在 {{time}} 到期，到时这台机器会断开，直到续上为止。",
+      "hostRenewStarted": "命令已经敲在下面的终端里：按回车，按提示操作即可。拿到新证书后，这一行会自己变绿。",
+      "loginHintSet": "设置续证书命令",
+      "loginHintChange": "修改续证书命令",
+      "loginHintLabel": "在本机续 SSH 证书的命令",
+      "loginHintPlaceholder": "在本机运行、用来续证书的那条命令",
+      "thisComputer": "本机"
     },
     "board": {
       "running": "在跑",

@@ -248,7 +248,9 @@ def reclaim(location_id: str) -> bool:
 
 
 def stop(location_id: str) -> None:
-    """End this Host's tunnel of the machine, if any, and forget it."""
+    """End this Host's tunnel of the machine, if any, and forget it (a failed build too: the
+    next build of a reinstalled machine starts as 'starting')."""
+    _FAILED.pop(str(location_id), None)
     got = _LIVE.pop(str(location_id), None)
     if got is not None and got[0].poll() is None:
         got[0].terminate()
@@ -291,8 +293,31 @@ def _start(location_id: str, cmd: list[str], local_port: int) -> subprocess.Pope
     return proc
 
 
+#: machine id -> when its last tunnel build failed; cleared when a build comes up
+_FAILED: dict[str, float] = {}
+
+
+def build_failed(location_id: str) -> bool:
+    """Whether the machine's last tunnel build failed (no build came up since). A probe then
+    answers 'unreachable' instead of 'still starting' (core/carriers/ssh)."""
+    return str(location_id) in _FAILED
+
+
 async def ensure(location_id: str, host: str, local_port: int, remote_port: int,
                  wait_s: float = READY_TIMEOUT_S) -> str:
+    """The machine's Hive base URL, after making sure its tunnel runs (_ensure). Records the
+    outcome for build_failed: a TunnelError marks the machine, a tunnel that is up clears it."""
+    try:
+        base = await _ensure(location_id, host, local_port, remote_port, wait_s)
+    except TunnelError:
+        _FAILED[str(location_id)] = time.time()
+        raise
+    _FAILED.pop(str(location_id), None)
+    return base
+
+
+async def _ensure(location_id: str, host: str, local_port: int, remote_port: int,
+                  wait_s: float = READY_TIMEOUT_S) -> str:
     """The machine's Hive base URL, after making sure its tunnel runs: the live one, or a
     new one whose forward answered within *wait_s*. A tunnel whose ssh exits while the
     connection is being set up (``connect_failed``) is started again, up to CONNECT_TRIES

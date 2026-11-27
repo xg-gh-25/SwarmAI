@@ -1307,8 +1307,12 @@ async def remove(machine_id: str) -> dict[str, Any]:
 
 
 async def set_options(machine_id: str, general_tasks: Optional[bool] = None,
-                      reaches_private: Optional[bool] = None, cert_renew_hint: Optional[str] = None) -> dict[str, Any]:
-    """Change the settings that take effect without a reinstall."""
+                      reaches_private: Optional[bool] = None, cert_renew_hint: Optional[str] = None,
+                      login_renew_hint: Optional[str] = None) -> dict[str, Any]:
+    """Change the settings that take effect without a reinstall. *login_renew_hint*: the
+    command that renews THIS computer's certificate for logging in to the machine (typed
+    into the App's terminal here, never sent over ssh); *cert_renew_hint* renews the
+    machine's own certificate, on the machine."""
     keys: dict[str, Any] = {}
     if general_tasks is not None:
         keys["general_tasks"] = bool(general_tasks)
@@ -1318,4 +1322,8 @@ async def set_options(machine_id: str, general_tasks: Optional[bool] = None,
         if not _HINT_RE.fullmatch(cert_renew_hint):
             raise ValueError("the certificate hint is one short line of plain text")
         keys["cert_renew_hint"] = cert_renew_hint
+    if login_renew_hint is not None:
+        if not _HINT_RE.fullmatch(login_renew_hint):
+            raise ValueError("the renew command is one short line of plain text")
+        keys["login_renew_hint"] = login_renew_hint
     return await _merge_config(machine_id, **keys)

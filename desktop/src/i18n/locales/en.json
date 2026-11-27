@@ -2206,7 +2206,16 @@
       "hintLabel": "The command that renews the machine's SSH certificate",
       "hintPlaceholder": "the command you run on the machine to renew it",
       "hintSave": "Save",
-      "deleteNote": "Remove {{name}}? The Hive is taken off the machine; its data stays there."
+      "deleteNote": "Remove {{name}}? The Hive is taken off the machine; its data stays there.",
+      "hostCertExpired": "this computer's certificate expired",
+      "hostCertEnded": "This computer's SSH certificate ended at {{time}}, so it cannot log in to this machine. Renew it here; the machine reconnects by itself within about half a minute.",
+      "hostCertEnds": "This computer's SSH certificate ends at {{time}}; this machine disconnects then until it is renewed.",
+      "hostRenewStarted": "The command is typed into the terminal below: press Enter and answer its prompts there. This row turns green by itself once the new certificate is in place.",
+      "loginHintSet": "Set the command that renews it",
+      "loginHintChange": "Change the renew command",
+      "loginHintLabel": "The command that renews this computer's SSH certificate",
+      "loginHintPlaceholder": "the command you run on this computer to renew it",
+      "thisComputer": "This computer"
     },
     "board": {
       "running": "Running",

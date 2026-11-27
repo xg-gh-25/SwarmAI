@@ -245,7 +245,9 @@ class SshLocation:
                 await ssh_tunnel.ensure(self.id, cfg["ssh_host"], cfg["local_port"], cfg["remote_port"])
             elif not await asyncio.to_thread(ssh_tunnel.alive, self.id, cfg["local_port"]):
                 ssh_tunnel.ensure_soon(self.id, cfg["ssh_host"], cfg["local_port"], cfg["remote_port"])
-                self._starting = True               # not an answer yet: its tunnel is being built
+                # not an answer yet while a first build runs; once a build failed (and none
+                # came up since) it is one: unreachable, with ssh's error, while it retries
+                self._starting = not ssh_tunnel.build_failed(self.id)
                 return None
             async with swarm_out._client(rec, swarm_out.PROBE_TIMEOUT_S) as client:
                 r = await client.get("/api/chat/sessions/admission-state")
