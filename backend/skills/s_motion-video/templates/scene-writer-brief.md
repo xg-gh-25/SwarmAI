@@ -7,7 +7,7 @@
 
 Project `P` = `<absolute path of the project>`
 Skill `SK` = `<absolute path of the s_motion-video skill>`
-Python: `<python with playwright, e.g. python3>`
+Python: `"$SWARM_BACKEND_BIN" py` (SwarmAI's own; render.py brings its pinned browser)
 
 ## Your scenes
 

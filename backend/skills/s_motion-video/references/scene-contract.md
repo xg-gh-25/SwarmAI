@@ -88,7 +88,7 @@ constant perceived speed). Every part is optional.
   for a scene with its own photo), the chapter shot types (default `chapter-card`) and the shot types
   without kicker or bar. Turn on what the style file asks for (exec-dark: plate, mask, vignette, kicker,
   progress); without `film.json` only the push is on.
-- **Film data:** `python3 "$SKILL_DIR/scripts/film.py" --project "$P"` writes `scenes/film-data.js`
+- **Film data:** `"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/film.py" --project "$P"` writes `scenes/film-data.js`
   (film length, each scene's start, chapter marks, each scene's kicker and the next section's title, the
   settings). **Re-run it after every `tts.py`** (durations change) and after editing `film.json`, a plate
   image, or the storyboard's order, titles or shot types. `film.py --check` exits 1 when the data is stale.
@@ -106,8 +106,8 @@ constant perceived speed). Every part is optional.
   `progress`): use it for a chapter card that names the next section. Never read film totals or other
   scenes; a scene's picture depends only on its own entry. (`derive.py` treats a page that reads
   `FL.scene`, or loads a project script, as depending on its whole entry: a new cut re-renders it when a
-  neighbour's title changes.) `FL.at(keyword, move)` is a cue clamped so a
-  move of `move` seconds still settles by `MV.end()`.
+  neighbour's title changes.) `FL.at(keyword, move, text)` is a cue clamped so a
+  move of `move` seconds still settles by `MV.end()` and, with `text`, so that text keeps its hold.
 - When the push is on, the layer owns `#camera`'s `scale`: move the camera with `x`/`y`, or animate an
   inner wrapper for a scene's own zoom.
 - **The look is the style's.** Each part gets a neutral `fl-*` class whose colours and font are the
@@ -150,8 +150,10 @@ unmuted `<video>`, `.to(` / `.from(` calls, a missing `MV.register(`, missing ru
 ## Timing (from project-contract.md)
 
 - Elements appear about 0.1 s before their keyword: `MV.cue(keyword)` already subtracts it.
-- The last motion settles 0.3 s before the scene end: clamp late cues with
-  `Math.min(MV.cue(kw), MV.end() - <move length>)`.
+- The last motion settles 0.3 s before the scene end, and key text stays readable for its hold
+  (project-contract.md, key text hold): clamp late cues with `FL.at(kw, <move length>, "<the text it reveals>")`
+  (without the film layer: `Math.min(MV.cue(kw), MV.duration - <hold> - <move length>)`). When the clamp pulls
+  the text far ahead of its word, move the word earlier in the narration instead.
 - Every move lasts at least 0.25 s (8 frames at 30 fps), per item in a stagger too.
 - The whole frame is never fully still for more than 2 s (except an end-card hold): keep one shot-long
   slow push on `#camera` (the film layer's push from `FL.setup`, about 3–5 % over the scene) or another
@@ -209,8 +211,8 @@ These hold for every film, written by the director alone or by parallel sub-agen
 ## Test one scene quickly
 
 ```bash
-python3 "$SKILL_DIR/scripts/check.py"  --project "$P" --scene S03            # static + 3 stills + storyboard
-python3 "$SKILL_DIR/scripts/render.py" --project "$P" --scene S03 --preview  # review/S03-{a,b,c}.jpg
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/check.py"  --project "$P" --scene S03            # static + 3 stills + storyboard
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/render.py" --project "$P" --scene S03 --preview  # review/S03-{a,b,c}.jpg
 ```
 Read the three stills (start, middle, end). `check.py` writes `review/check-S03.json`; it fails on page
 errors (including an unknown `MV.cue` keyword), missing files, blocked requests, a blank middle/end
@@ -226,7 +228,7 @@ Then `render.py --project "$P" --scene S03` makes `build/S03.mp4` (skipped when 
 | Element visible before its entrance, or missing later | two fromTo on one property without `immediateRender: false` | add it to the later tween |
 | One-frame pop (check: tween shorter than 0.25 s; defects: jumps) | duration < 0.25 s, `set` used as an entrance, CSS state change | fromTo with duration >= 0.25 s and easing |
 | Frozen stretch (defects: still) | everything landed, nothing drifts | the layer's push (`FL.setup`), plate drift, progress line |
-| "FL: scenes/film-data.js is stale" / "no film data" | durations changed (tts.py) or film.py never ran | `python3 "$SKILL_DIR/scripts/film.py" --project "$P"` |
+| "FL: scenes/film-data.js is stale" / "no film data" | durations changed (tts.py) or film.py never ran | `"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/film.py" --project "$P"` |
 | Flash on one frame | element hidden for one frame (overlapping tweens, display toggles) | one owner per property; tween opacity, not display |
 | Text jumps lines between frames | auto-wrapped CJK | `white-space: nowrap` + `<br>` |
 | Caption covers a label | text placed in the bottom 16 % | move it above `var(--cap-band)` |

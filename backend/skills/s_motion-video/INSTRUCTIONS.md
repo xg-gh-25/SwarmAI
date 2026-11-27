@@ -84,10 +84,14 @@ Pollinate only lists the film; this skill keeps making and revising it.
 ## 4. Voice first — durations come from the voice
 
 ```bash
-python3 "$SKILL_DIR/scripts/tts.py"  --project "$P"           # writes audio/voice/* and scene durations
-python3 "$SKILL_DIR/scripts/film.py" --project "$P"           # film data for the shared layer: run after EVERY tts.py
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/tts.py"  --project "$P"           # writes audio/voice/* and scene durations
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/film.py" --project "$P"           # film data for the shared layer: run after EVERY tts.py
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/check.py" --project "$P" --storyboard   # late cue words, before any scene is written
 ```
 For Chinese, put polyphones, English terms and brand names in `$P/pronounce.json` before running.
+A `--storyboard` warning names a `'label' <- cue` whose cue word is spoken too late for the label to stay
+readable (the key text hold, project-contract.md): move the word earlier in the narration, re-run `tts.py`
+and `film.py`, and check again before writing scenes.
 Scenes without narration get a hand-set `duration`. `film.py` writes `scenes/film-data.js` (film length,
 scene starts, chapter marks, kickers) from the storyboard and `film.json`; a scene whose duration no longer
 matches it fails `check.py` with a message naming `film.py`.
@@ -96,8 +100,8 @@ matches it fails `check.py` with a message naming `film.py`.
 
 1. Write the most representative scene (usually S01 or the hero scene) per `scene-contract.md`
    and the style file. Use `MV.cue("keyword")` for every element the narration names.
-2. `python3 "$SKILL_DIR/scripts/check.py" --project "$P" --scene S01` and
-   `python3 "$SKILL_DIR/scripts/render.py" --project "$P" --scene S01 --preview`; read the 3
+2. `"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/check.py" --project "$P" --scene S01` and
+   `"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/render.py" --project "$P" --scene S01 --preview`; read the 3
    stills. **Budget: at most 3 checks per scene**, then record the problem and move on.
 3. When it passes, write `design.md` (≤ 30 lines): palette, type scale, caption look, shot
    grammar, how scenes join, shared blocks in `scenes/shared.css`. Write `film.json` (from
@@ -120,18 +124,18 @@ matches it fails `check.py` with a message naming `film.py`.
 ## 7. Render, music, mix
 
 ```bash
-python3 "$SKILL_DIR/scripts/render.py" --project "$P"            # changed scenes only (fingerprints)
-python3 "$SKILL_DIR/scripts/render.py" --project "$P" --join     # build/picture.mp4
-python3 "$SKILL_DIR/scripts/bgm.py"    --project "$P"            # if storyboard.bgm is set
-python3 "$SKILL_DIR/scripts/sfx.py"    --project "$P"
-python3 "$SKILL_DIR/scripts/mix.py"    --project "$P"            # build/mix.wav + review/loudness.json
-python3 "$SKILL_DIR/scripts/render.py" --project "$P" --final    # out/<slug>.mp4
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/render.py" --project "$P"            # changed scenes only (fingerprints)
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/render.py" --project "$P" --join     # build/picture.mp4
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/bgm.py"    --project "$P"            # if storyboard.bgm is set
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/sfx.py"    --project "$P"
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/mix.py"    --project "$P"            # build/mix.wav + review/loudness.json
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/render.py" --project "$P" --final    # out/<slug>.mp4
 ```
 **Budget: one full render per draft.** Fix a batch, then render; never render after each edit.
 
 ## 8. Review — measure first, then look
 
-1. `python3 "$SKILL_DIR/scripts/defects.py" --project "$P"` (flashes, jumps, freezes ≥ 2.5 s;
+1. `"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/defects.py" --project "$P"` (flashes, jumps, freezes ≥ 2.5 s;
    move length and settle time are checked exactly by `check.py` from the timeline) and `review_evidence.py` (contact sheets, full frames, seams, strip).
 2. Read the evidence images and score with `craft-rubric.md`: first the big defects (at most 6,
    only ones you caused), then K1–K9 and C1–C3. A score below 1 must cite a sheet cell or a
@@ -177,7 +181,7 @@ stays as it was; the new one is its own Pollinate work.
 3. **Derive** into a new folder (not inside the old one):
    ```bash
    OLD="<old project>"; P="${SWARM_WORKSPACE:-$HOME/.swarm-ai/SwarmWS}/Services/motion-video/projects/<yyyy-mm-dd>-<slug>"
-   python3 "$SKILL_DIR/scripts/derive.py" --from "$OLD" --to "$P" --plan plan.json
+   "$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/derive.py" --from "$OLD" --to "$P" --plan plan.json
    ```
    Reused pages are copied byte for byte with the files they load; a reused scene with identical narration
    keeps its voice; changed narration is marked for re-voicing; the output lists new scenes to write and the

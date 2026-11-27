@@ -61,8 +61,9 @@
     tl.fromTo(items[i], { opacity: 0, x: -50 * u }, { opacity: 1, x: 0, duration: 0.5 }, MV.cue(kw));
   });
 
-  // 3) stat + bars on "quarter"; clamped so the last move (0.6 s + 2 x 0.12 s stagger) settles by MV.end()
-  const tStat = FL.at("quarter", 0.84);
+  // 3) stat + bars on "quarter"; clamped so the last move (0.6 s + 2 x 0.12 s stagger) settles by MV.end() and the
+  //    stat's text ("90 days") stays readable for its hold before the scene ends
+  const tStat = FL.at("quarter", 0.84, "90 days");
   const counter = { v: 0 }, num = document.getElementById("num");
   tl.fromTo("#stat", { opacity: 0, y: 30 * u }, { opacity: 1, y: 0, duration: 0.5 }, tStat);
   tl.fromTo(counter, { v: 0 }, { v: 90, duration: 0.6, ease: "power1.out",

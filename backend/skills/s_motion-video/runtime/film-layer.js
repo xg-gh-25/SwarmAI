@@ -27,6 +27,18 @@
  * scene's picture depends only on its own entry; scripts/derive.py relies on that.
  */
 (function () {
+  // key text hold (project-contract.md; the same numbers as check.py HOLD_*: tests/test_film_layer.py keeps them equal)
+  var HOLD_CJK_PER_S = 4.5, HOLD_OTHER_PER_S = 15, HOLD_BASE_S = 1.5;
+  var CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f]/;
+  function hold(text) {
+    var cjk = 0, other = 0;
+    for (var ch of text) {
+      if (CJK.test(ch)) cjk++;
+      else if (!/\s/.test(ch) && !/\p{P}/u.test(ch)) other++;
+    }
+    return cjk / HOLD_CJK_PER_S + other / HOLD_OTHER_PER_S + HOLD_BASE_S;
+  }
+
   "use strict";
   var CSS = [
     ":where(.fl-plate){position:absolute;inset:-3%;overflow:hidden;pointer-events:none;}",
@@ -158,7 +170,13 @@
     setup: setup,
     // this scene's entry in the film data (title, chapter, section, next, kicker, progress); read-only
     get scene() { return sceneEntry(film()); },
-    // a cue clamped so a move of `move` seconds still settles by MV.end()
-    at: function (keyword, move) { return Math.max(0, Math.min(MV.cue(keyword), MV.end() - (move == null ? 0.6 : +move))); }
+    // a cue clamped so a move of `move` seconds still settles by MV.end(); with `text` (the key text the move
+    // reveals) also so that text stays readable for its hold before the scene ends (project-contract.md, key
+    // text hold: CJK / 4.5 + other / 15 + 1.5 s), the rule check.py fails a scene on
+    at: function (keyword, move, text) {
+      var m = move == null ? 0.6 : +move, latest = MV.end() - m;
+      if (text != null) latest = Math.min(latest, MV.duration - hold(String(text)) - m);
+      return Math.max(0, Math.min(MV.cue(keyword), latest));
+    }
   };
 })();

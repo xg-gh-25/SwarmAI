@@ -4,6 +4,7 @@ Run: python3 -m pytest tests/test_film_layer.py -q   (from the skill directory).
 python playwright + Chromium + ffmpeg."""
 import json
 import os
+import sys
 import re
 import shutil
 
@@ -275,3 +276,36 @@ def test_stale_film_data_fails_check(tmp_path):
     assert "film-data.js is stale" in rep and "film.py" in rep
     assert film.main(["--project", p]) == 0
     assert check.main(["--project", p, "--scene", "S02"]) == 0
+
+
+
+def test_film_layer_hold_numbers_match_check_py():
+    """FL.at's key text hold uses the numbers check.py fails a scene on (project-contract.md, key text hold)"""
+    import re
+    sys.path.insert(0, os.path.join(SKILL, "scripts"))
+    import check
+    js = open(os.path.join(SKILL, "runtime", "film-layer.js"), encoding="utf-8").read()
+    got = {k: float(v) for k, v in re.findall(r"(HOLD_CJK_PER_S|HOLD_OTHER_PER_S|HOLD_BASE_S) = ([0-9.]+)", js)}
+    assert got == {"HOLD_CJK_PER_S": check.HOLD_CJK_PER_S, "HOLD_OTHER_PER_S": check.HOLD_OTHER_PER_S,
+                   "HOLD_BASE_S": check.HOLD_BASE_S}
+
+
+def test_template_keeps_late_stat_text_readable(tmp_path):
+    """the word that reveals the stat is spoken 0.8 s before the end: FL.at with the stat's text pulls it early
+    enough for check.py's key text hold; the same page without the text argument fails"""
+    need_browser()
+    p = template_project(tmp_path)
+    wpath = os.path.join(p, "audio", "voice", "S02.words.json")
+    words = json.load(open(wpath, encoding="utf-8"))
+    for w in words:                       # only the stat's word moves late; the scene keeps its 7 s
+        if w["text"].lower().startswith("quarter"):
+            w["start"], w["end"] = 6.2, 6.6
+    json.dump(words, open(wpath, "w"))
+    assert film.main(["--project", p]) == 0
+    assert check.main(["--project", p, "--scene", "S02"]) == 0
+    page = os.path.join(p, "scenes", "S02.html")
+    html = open(page, encoding="utf-8").read()
+    assert 'FL.at("quarter", 0.84, "90 days")' in html
+    open(page, "w", encoding="utf-8").write(html.replace('FL.at("quarter", 0.84, "90 days")', 'FL.at("quarter", 0.84)'))
+    assert check.main(["--project", p, "--scene", "S02"]) == 1
+    assert "key text" in open(os.path.join(p, "review", "check-S02.json"), encoding="utf-8").read()

@@ -33,11 +33,10 @@ def test_skill_md_states_the_runtime_contract():
                         [node.module] if isinstance(node, ast.ImportFrom) and node.module and node.level == 0 else [])
                 used |= {m.split(".")[0] for m in mods} & THIRD_PARTY
     used.discard("botocore")   # ships with boto3
-    # render.py drives SwarmAI's pinned browser runtime (render_driver.mjs), so no script imports Python Playwright any
-    # more (test_render_runtime.py holds that); a `playwright` still listed in python-optional-deps is a stale entry
-    # left for SKILL.md's owner to drop, and holds either way here
-    declared = (set(deps) | set(optional)) - {"playwright"}
-    assert "playwright" not in used
+    # render.py drives SwarmAI's pinned browser runtime (render_driver.mjs): no script imports Python Playwright, and
+    # SKILL.md declares none
+    declared = set(deps) | set(optional)
+    assert "playwright" not in used and "playwright" not in declared
     assert used == declared, f"imports {sorted(used)} vs declared {sorted(declared)}"
     for word in ("ffmpeg", "Polly", "edge-tts", "--engine auto"):
         assert word in text

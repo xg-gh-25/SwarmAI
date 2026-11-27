@@ -12,6 +12,10 @@ Every script takes `--project <dir>` and reads/writes only inside it.
   design.md                short design contract written after the sample scene (palette, type, motion, reused blocks)
   scenes/S01.html ...      one self-contained HTML page per scene (contract: references/scene-contract.md)
   scenes/shared.css        optional styles shared by all scenes
+  film.json                optional film-wide layer settings: plate, mask, vignette, kicker, progress, push
+                           (template: templates/film.json; runtime/film-layer.js)
+  scenes/film-data.js      film length, scene starts, chapter marks, kickers  (scripts/film.py, after every tts.py)
+  derive.json              a cut made from an earlier film: the old project and each scene's origin (scripts/derive.py)
   assets/                  images, logos, generated art (local files only, no URLs)
   audio/voice/S01.mp3      narration per scene            (scripts/tts.py)
   audio/voice/S01.words.json   word timings  [{"text","start","end"}]  seconds from scene start
