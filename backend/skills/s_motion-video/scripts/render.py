@@ -4,7 +4,8 @@
   render.py --project P                 render every scene whose fingerprint changed -> build/<id>.mp4
   render.py --project P --scene S03     one scene
   render.py --project P --preview       3 stills per scene (start/middle/end) -> review/<id>-{a,b,c}.jpg, no video
-  render.py --project P --join          render, then join -> build/picture.mp4 (cut = concat, fade = 0.4 s xfade)
+  render.py --project P --join          render, then join -> build/picture.mp4 (cut = concat, fade = 0.4 s xfade;
+                                        only the fade frames are re-encoded, everything else is stream-copied)
   render.py --project P --final         render, join, mux build/mix.wav -> out/<slug>.mp4
 Options: --jobs N (scenes in parallel, default 3), --force (ignore fingerprints).
 
@@ -17,6 +18,14 @@ Fade transitions keep the film length = sum of scene durations: the outgoing sce
 (build/<id>.tail.mp4) = its last frame frozen, with the NEXT scene's caption already in the caption box, and the
 join cross-fades that tail into the first 0.4 s of the next scene (xfade offset = end of the outgoing scene).
 So the next scene starts exactly at its audio time, and the caption box never shows two lines blended.
+
+How the join stays fast and lossless: every scene encode carries a keyframe at the fade length (frame 12 at 30 fps).
+A fade is encoded as its own short segment (the xfade of the tail with the next scene's first frames, same encoder
+settings and colour tags); the scenes are stream-copied around it, the next scene entering at that keyframe. The
+joined file is checked (frame count, timestamps, codec parameters, one full decode). The whole film is re-encoded
+in one filter graph only when the segments' codec parameters differ, a fade leads into a scene not longer than the
+fade, or the check fails; the log says which. A scene encoded without that keyframe is still joined exactly: its fade
+segment runs on to the scene's next keyframe.
 
 Exit codes: 0 ok, 1 render/verification failed, 2 usage or environment error.
 """
@@ -32,6 +41,8 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from fractions import Fraction
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
@@ -158,12 +169,17 @@ def caption_at(caps, t):
     return cur["text"] if cur else ""
 
 
+def fade_frames(fps):
+    """frames in one fade: the tail clip's length and the frame of the keyframe every scene encode carries"""
+    return max(1, int(round(FADE_S * fps)))
+
+
 def tail_spec(sb, idx, data_next):
     """(frames, [caption text per tail frame]) when this scene fades into the next one, else None"""
     sc = sb["scenes"][idx]
     if sc.get("transition") != "fade" or idx + 1 >= len(sb["scenes"]):
         return None
-    k = max(1, int(round(FADE_S * sb["fps"])))
+    k = fade_frames(sb["fps"])
     if data_next and data_next["showCaptions"]:
         caps = [caption_at(data_next["captions"], j / sb["fps"]) for j in range(k)]
     else:
@@ -412,19 +428,26 @@ class ScenePage:
 SETPARAMS = "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
 
 
-def encode_args(fps, out):
-    """JPEG (full range, BT.601 matrix) -> H.264 yuv420p limited range, BT.709 matrix and tags"""
+def x264_args(fps):
+    """the H.264 settings of every encode (scene, tail, fade segment, full re-encode join). A stream-copy join needs the
+    same parameter sets in every segment, so they are written once, here."""
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-g", str(int(round(fps * 2))),
+            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
+            "-r", str(fps), "-an"]
+
+
+def encode_args(fps, out, key_at=None):
+    """JPEG (full range, BT.601 matrix) -> H.264 yuv420p limited range, BT.709 matrix and tags.
+    key_at: frame index that must start a new GOP (an IDR), so the join can split the scene there without re-encoding"""
+    keys = ["-force_key_frames", f"expr:eq(n,{int(key_at)})"] if key_at else []
     return [tool("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-f", "image2pipe", "-framerate", str(fps), "-c:v", "mjpeg", "-i", "-",
             "-vf", "scale=in_range=full:out_range=tv:in_color_matrix=bt601:out_color_matrix=bt709:flags=accurate_rnd+full_chroma_int,"
-                   "format=yuv420p," + SETPARAMS,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-g", str(int(round(fps * 2))),
-            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
-            "-r", str(fps), "-an", "-movflags", "+faststart", out]
+                   "format=yuv420p," + SETPARAMS] + x264_args(fps) + keys + ["-movflags", "+faststart", out]
 
 
-async def encode_frames(sp, times, captions, out):
+async def encode_frames(sp, times, captions, out, key_at=None):
     tmp = out + ".part.mp4"
-    proc = await asyncio.create_subprocess_exec(*encode_args(sp.data["fps"], tmp), stdin=asyncio.subprocess.PIPE,
+    proc = await asyncio.create_subprocess_exec(*encode_args(sp.data["fps"], tmp, key_at), stdin=asyncio.subprocess.PIPE,
                                                 stderr=asyncio.subprocess.PIPE)
     try:
         for i, t in enumerate(times):
@@ -455,7 +478,10 @@ async def render_scene_video(browser, server, project, data, tail):
     try:
         await sp.open()
         t1 = time.time()
-        await encode_frames(sp, [i / fps for i in range(n)], None, os.path.join(build, f"{sid}.mp4"))
+        # a keyframe at the fade length in every scene (whatever its neighbours' transitions), so a fade into it is
+        # joined by re-encoding only the fade frames and changing a transition never needs a re-render
+        k = fade_frames(fps)
+        await encode_frames(sp, [i / fps for i in range(n)], None, os.path.join(build, f"{sid}.mp4"), k if n > k else None)
         frames = n
         tail_path = os.path.join(build, f"{sid}.tail.mp4")
         if tail:
@@ -634,13 +660,208 @@ def probe_duration(path):
         raise RenderError(f"cannot read duration of {path}: {r.stderr[-200:]}")
 
 
+# Every join input chain: setpts alone marks the link variable-rate (ffmpeg 7), and xfade refuses that; the frames are
+# already on the 1/fps grid, so fps=<fps> passes each one through unchanged and only restores the constant rate.
+JOIN_CHAIN = "setpts=PTS-STARTPTS,fps={fps},format=yuv420p,settb=AVTB"
+# what must be identical in every stream-copied segment (the concat demuxer keeps the first file's parameter sets)
+STREAM_KEYS = ("codec_name", "profile", "level", "pix_fmt", "width", "height", "sample_aspect_ratio", "color_range",
+               "color_space", "color_transfer", "color_primaries", "time_base", "r_frame_rate", "extradata_hash")
+
+
+def probe_stream(path):
+    """the codec parameters of the first video stream, STREAM_KEYS only (extradata_hash = the H.264 parameter sets)"""
+    r = subprocess.run([tool("ffprobe"), "-v", "error", "-select_streams", "v:0", "-show_streams", "-show_data_hash", "SHA256",
+                        "-of", "json", path], capture_output=True, text=True)
+    try:
+        st = json.loads(r.stdout)["streams"][0]
+    except (ValueError, KeyError, IndexError):
+        raise RenderError(f"cannot read the video stream of {path}: {r.stderr[-200:]}")
+    return {k: st.get(k) for k in STREAM_KEYS}
+
+
+def probe_packets(path):
+    """(time_base as Fraction, [(pts, dts, is_key)] in decode order) of the first video stream"""
+    r = subprocess.run([tool("ffprobe"), "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=time_base:packet=pts,dts,flags", "-of", "json", path], capture_output=True, text=True)
+    try:
+        d = json.loads(r.stdout)
+        tb = Fraction(d["streams"][0]["time_base"])
+        pk = [(int(p["pts"]), int(p["dts"]), "K" in p.get("flags", "")) for p in d.get("packets", [])]
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise RenderError(f"cannot read the packets of {path}: {r.stderr[-200:]}")
+    return tb, pk
+
+
+def keyframe_times(path, fps):
+    """{frame index: exact presentation time (Fraction, seconds)} of the keyframes (IDR) of a scene encode"""
+    tb, pk = probe_packets(path)
+    rate = Fraction(str(fps))
+    return {int(round(pts * tb * rate)): pts * tb for pts, _, key in pk if key}
+
+
+def plan_split(ids, frames, fades, keyframes, k):
+    """Segments of a stream-copy join, or (None, reason) when it cannot be done.
+    frames[i]: frames of scene i; fades[i]: scene i fades into scene i+1; keyframes[i]: keyframe frame indices of scene i;
+    k: frames in a fade. Returns ([segment], [(scene index, head frames)] for fades that run past k), where a segment is
+    {"kind": "copy", "scene": i, "start": first frame, "frames": count} (stream copy of scene i from a keyframe) or
+    {"kind": "fade", "scene": i, "head": h}: tail of scene i cross-faded into the first k frames of scene i+1, then
+    frames k..h-1 of scene i+1, all encoded; h = the first keyframe of scene i+1 at or after k (its frame count if none)."""
+    segs, longer, start = [], [], 0
+    for i, n in enumerate(frames):
+        if start < n:
+            segs.append({"kind": "copy", "scene": i, "start": start, "frames": n - start})
+        if fades[i]:
+            m = frames[i + 1]
+            if m <= k:
+                return None, (f"{ids[i]} fades into {ids[i + 1]}, which is not longer than the fade "
+                              f"({m} frames, the fade is {k})")
+            h = min([f for f in keyframes[i + 1] if f >= k] or [m])
+            if h > k:
+                longer.append((i + 1, h))
+            segs.append({"kind": "fade", "scene": i, "head": h})
+            start = h
+        else:
+            start = 0
+    return segs, longer
+
+
+def concat_time(frames, fps):
+    """frames / fps as a concat-script time string, rounded to the microsecond"""
+    rate = Fraction(str(fps))
+    us = int(round(Fraction(frames) * 1000000 / rate))
+    return f"{us // 1000000}.{us % 1000000:06d}"
+
+
+def join_split(build, ids, plan, keyframes, fps, k, out):
+    """encode the fade segments (in parallel), then concat everything with stream copy into `out`.
+    Returns the stream parameters of each fade segment {name: params}. Work files live in build/join.tmp/ and are removed."""
+    work = os.path.join(build, "join.tmp")
+    shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(work)
+    chain = JOIN_CHAIN.format(fps=fps)
+    try:
+        def encode_fade(seg):
+            i, h = seg["scene"], seg["head"]
+            dst = os.path.join(work, f"{ids[i]}.fade.mp4")
+            graph = (f"[0:v]{chain}[a];[1:v]trim=end_frame={h},{chain}[b];"
+                     f"[a][b]xfade=transition=fade:duration={k / fps:.6f}:offset=0,{SETPARAMS}[out]")
+            cmd = [tool("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error",
+                   "-i", os.path.join(build, f"{ids[i]}.tail.mp4"), "-i", os.path.join(build, f"{ids[i + 1]}.mp4"),
+                   "-filter_complex", graph, "-map", "[out]", "-frames:v", str(h)] + x264_args(fps) + ["-movflags", "+faststart", dst]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RenderError(f"fade {ids[i]} -> {ids[i + 1]}: ffmpeg failed: {r.stderr[-400:]}")
+            got = probe_frames(dst)
+            if got != h:
+                raise RenderError(f"fade {ids[i]} -> {ids[i + 1]}: {got} frames encoded, expected {h}")
+            return dst
+
+        fades = [seg for seg in plan if seg["kind"] == "fade"]
+        params = {}
+        if fades:
+            with ThreadPoolExecutor(max_workers=min(4, len(fades))) as ex:
+                for seg, dst in zip(fades, ex.map(encode_fade, fades)):
+                    params[os.path.basename(dst)] = probe_stream(dst)
+        lines = []
+        for seg in plan:
+            i = seg["scene"]
+            if seg["kind"] == "copy":
+                lines.append(f"file '../{ids[i]}.mp4'")
+                if seg["start"]:
+                    # the keyframe's own time (to the microsecond; the demuxer converts it back to the nearest stream
+                    # tick and seeks to the keyframe at or before it, so the scene enters exactly at that keyframe)
+                    us = int(round(keyframes[i][seg["start"]] * 1000000))
+                    lines.append(f"inpoint {us // 1000000}.{us % 1000000:06d}")
+                lines.append(f"duration {concat_time(seg['frames'], fps)}")
+            else:
+                lines.append(f"file '{ids[i]}.fade.mp4'")
+                lines.append(f"duration {concat_time(seg['head'], fps)}")
+        lst = os.path.join(work, "concat.txt")
+        with open(lst, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        cmd = [tool("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst,
+               "-map", "0:v:0", "-c:v", "copy", "-an", "-movflags", "+faststart", out]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RenderError(f"concat (stream copy) failed: {r.stderr[-400:]}")
+        return params
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def verify_picture(path, total, fps, ref):
+    """None when `path` is a sound join of `total` frames, else what is wrong: codec parameters equal `ref`, frame count,
+    every frame on the 1/fps grid from 0 with no gap or duplicate, strictly increasing decode timestamps, the duration,
+    and one full decode without an error"""
+    got = probe_stream(path)
+    if got != ref:
+        return "codec parameters differ from the scenes': " + ", ".join(k for k in STREAM_KEYS if got.get(k) != ref.get(k))
+    tb, pk = probe_packets(path)
+    if len(pk) != total:
+        return f"{len(pk)} frames, the storyboard sum is {total}"
+    for j in range(1, len(pk)):
+        if pk[j][1] <= pk[j - 1][1]:
+            return f"decode timestamps not increasing at packet {j}"
+    rate = Fraction(str(fps))
+    if sorted(int(round(p[0] * tb * rate)) for p in pk) != list(range(total)):
+        return "frame timestamps are not one per 1/fps step from 0"
+    dur = probe_duration(path)
+    if abs(dur - total / fps) > 0.5 / fps:
+        return f"duration {dur:.3f}s, expected {total / fps:.3f}s"
+    r = subprocess.run([tool("ffmpeg"), "-v", "error", "-i", path, "-map", "0:v:0", "-f", "null", "-"], capture_output=True, text=True)
+    if r.returncode != 0 or r.stderr.strip():
+        return "decode errors: " + (r.stderr.strip() or f"ffmpeg exit {r.returncode}")[-300:]
+    return None
+
+
+def join_reencode(clips, frames, fps, out):
+    """the whole film in one filter graph, every frame re-encoded: cuts concatenated, each fade = xfade of the outgoing
+    scene's tail into the first 0.4 s of the next scene at offset = end of the outgoing scene. clips: [(scene, tail or None)]"""
+    inputs, graph, labels, k_in = [], [], [], 0
+    chain = JOIN_CHAIN.format(fps=fps)
+    for p, t in clips:
+        inputs += ["-i", p]
+        labels.append([f"v{k_in}"])
+        graph.append(f"[{k_in}:v]{chain}[v{k_in}]")
+        k_in += 1
+        if t:
+            inputs += ["-i", t]
+            labels[-1].append(f"v{k_in}")
+            graph.append(f"[{k_in}:v]{chain}[v{k_in}]")
+            k_in += 1
+    acc, acc_frames, step = labels[0][0], frames[0], 0
+    k_fade = fade_frames(fps)
+    for i in range(1, len(clips)):
+        nxt = labels[i][0]
+        prev_tail = labels[i - 1][1] if len(labels[i - 1]) > 1 else None
+        step += 1
+        if prev_tail:
+            graph.append(f"[{acc}][{prev_tail}]concat=n=2:v=1:a=0[t{step}]")
+            graph.append(f"[t{step}][{nxt}]xfade=transition=fade:duration={k_fade / fps:.6f}:offset={acc_frames / fps:.6f}[j{step}]")
+        else:
+            graph.append(f"[{acc}][{nxt}]concat=n=2:v=1:a=0[j{step}]")
+        acc, acc_frames = f"j{step}", acc_frames + frames[i]
+    graph.append(f"[{acc}]{SETPARAMS}[out]")
+    cmd = [tool("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error"] + inputs + [
+        "-filter_complex", ";".join(graph), "-map", "[out]", "-frames:v", str(sum(frames))] + x264_args(fps) + [
+        "-movflags", "+faststart", out]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        if os.path.exists(out):
+            os.remove(out)
+        raise RenderError(f"join failed: {r.stderr[-600:]}")
+
+
 def join(project, log=print):
     project = os.path.abspath(project)
     sb = load_storyboard(project)
     fps = sb["fps"]
     build = os.path.join(project, "build")
     scenes = sb["scenes"]
+    ids = [s["id"] for s in scenes]
     frames = [scene_frames(sb, s) for s in scenes]
+    fades = [s.get("transition") == "fade" and i + 1 < len(scenes) for i, s in enumerate(scenes)]
+    k = fade_frames(fps)
     clips = []
     for i, s in enumerate(scenes):
         p = os.path.join(build, f"{s['id']}.mp4")
@@ -649,10 +870,13 @@ def join(project, log=print):
         got = probe_frames(p)
         if got != frames[i]:
             raise RenderError(f"build/{s['id']}.mp4 has {got} frames, storyboard says {frames[i]} (re-render with --force)")
-        fade = s.get("transition") == "fade" and i + 1 < len(scenes)
-        tail = os.path.join(build, f"{s['id']}.tail.mp4") if fade else None
-        if fade and not os.path.isfile(tail):
-            raise RenderError(f"missing build/{s['id']}.tail.mp4 for the fade into {scenes[i + 1]['id']} (re-render {s['id']})")
+        tail = os.path.join(build, f"{s['id']}.tail.mp4") if fades[i] else None
+        if fades[i]:
+            if not os.path.isfile(tail):
+                raise RenderError(f"missing build/{s['id']}.tail.mp4 for the fade into {scenes[i + 1]['id']} (re-render {s['id']})")
+            got = probe_frames(tail)
+            if got != k:
+                raise RenderError(f"build/{s['id']}.tail.mp4 has {got} frames, the fade needs {k} (re-render {s['id']} with --force)")
         clips.append((p, tail))
     out = os.path.join(build, "picture.mp4")
     jfp = hashlib.sha256(json.dumps([RENDER_VERSION, fps, [s.get("transition") for s in scenes],
@@ -665,52 +889,45 @@ def join(project, log=print):
         return out
     t0 = time.time()
     tmp = out + ".part.mp4"
-    if not any(t for _, t in clips):
-        lst = os.path.join(build, "concat.txt")
-        open(lst, "w").write("".join(f"file '{p}'\n" for p, _ in clips))
-        cmd = [tool("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst,
-               "-an", "-c:v", "copy", "-movflags", "+faststart", tmp]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        os.remove(lst)
-        how = "concat (stream copy)"
-    else:
-        inputs, graph, k_in = [], [], 0
-        labels = []
-        for p, t in clips:
-            inputs += ["-i", p]
-            labels.append([f"v{k_in}"])
-            graph.append(f"[{k_in}:v]setpts=PTS-STARTPTS,format=yuv420p,settb=AVTB[v{k_in}]")
-            k_in += 1
-            if t:
-                inputs += ["-i", t]
-                labels[-1].append(f"v{k_in}")
-                graph.append(f"[{k_in}:v]setpts=PTS-STARTPTS,format=yuv420p,settb=AVTB[v{k_in}]")
-                k_in += 1
-        acc, acc_frames, step = labels[0][0], frames[0], 0
-        k_fade = max(1, int(round(FADE_S * fps)))
-        for i in range(1, len(clips)):
-            nxt = labels[i][0]
-            prev_tail = labels[i - 1][1] if len(labels[i - 1]) > 1 else None
-            step += 1
-            if prev_tail:
-                graph.append(f"[{acc}][{prev_tail}]concat=n=2:v=1:a=0[t{step}]")
-                graph.append(f"[t{step}][{nxt}]xfade=transition=fade:duration={k_fade / fps:.6f}:offset={acc_frames / fps:.6f}[j{step}]")
+    how, why = None, None
+    try:
+        ref = probe_stream(clips[0][0])
+        for p, _ in clips[1:]:
+            got = probe_stream(p)
+            if got != ref:
+                why = (f"codec parameters of build/{os.path.basename(p)} differ from build/{os.path.basename(clips[0][0])} ("
+                       + ", ".join(x for x in STREAM_KEYS if got.get(x) != ref.get(x)) + "); re-render with --force to match")
+                break
+        if why is None:
+            keyframes = [keyframe_times(clips[i][0], fps) if i and fades[i - 1] else {} for i in range(len(clips))]
+            plan, longer = plan_split(ids, frames, fades, [sorted(kf) for kf in keyframes], k)
+            if plan is None:
+                why = longer
             else:
-                graph.append(f"[{acc}][{nxt}]concat=n=2:v=1:a=0[j{step}]")
-            acc, acc_frames = f"j{step}", acc_frames + frames[i]
-        graph.append(f"[{acc}]{SETPARAMS}[out]")
-        acc = "out"
-        cmd = [tool("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error"] + inputs + [
-            "-filter_complex", ";".join(graph), "-map", f"[{acc}]", "-frames:v", str(total), "-r", str(fps),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-g", str(int(round(fps * 2))),
-            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
-            "-an", "-movflags", "+faststart", tmp]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        how = "concat + xfade (re-encode)"
-    if r.returncode != 0:
+                for i, h in longer:
+                    log(f"  {ids[i]}: no keyframe at frame {k} (encoded before keyframe-split joins); its fade re-encodes "
+                        f"frames 0-{h - 1}; re-render {ids[i]} with --force for a lossless split")
+                seg_params = join_split(build, ids, plan, keyframes, fps, k, tmp)
+                bad = [n for n, prm in seg_params.items() if prm != ref]
+                if bad:
+                    why = (f"the fade segment {bad[0]} was encoded with different codec parameters than the scenes ("
+                           + ", ".join(x for x in STREAM_KEYS if seg_params[bad[0]].get(x) != ref.get(x)) + ")")
+                else:
+                    problem = verify_picture(tmp, total, fps, ref)
+                    if problem:
+                        why = f"the stream-copy join failed its check: {problem}"
+                    else:
+                        n_fade = sum(seg["head"] for seg in plan if seg["kind"] == "fade")
+                        how = (f"concat + per-fade encode (stream copy, {n_fade} fade frames encoded)" if n_fade
+                               else "concat (stream copy)")
+    except RenderError as e:
+        why = f"the stream-copy join failed: {e}"
+    if how is None:
         if os.path.exists(tmp):
             os.remove(tmp)
-        raise RenderError(f"join failed: {r.stderr[-600:]}")
+        log(f"picture.mp4: joining by full re-encode: {why}")
+        join_reencode(clips, frames, fps, tmp)
+        how = "concat + xfade (full re-encode)"
     got = probe_frames(tmp)
     if got != total:
         os.remove(tmp)
