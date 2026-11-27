@@ -41,8 +41,6 @@ ALLOWED = {
     "scripts/verify_permission_template.py":
         "a developer check run by hand: IAM simulates the template under any identity "
         "the person names (--profile), not necessarily the SwarmAI account",
-    "skills/s_pollinate/scripts/tts/backends/polly.py":
-        "a skill script run in the agent's shell, as the user",
     "skills/s_motion-video/scripts/tts.py":
         "a skill script run in the agent's shell: Polly on SwarmAI's account through the daemon's swarmai profile "
         "(credential_process), never the person's own profiles",
