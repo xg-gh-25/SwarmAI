@@ -110,7 +110,9 @@ describe('the funnel on the card', () => {
     const { unmount } = card(hand());
     const land = within(screen.getByTestId('swarm-out-funnel')).getAllByTestId('swarm-out-funnel-gate')[1];
     expect(land.textContent).toContain('Landed by hand by the agent: 7c0ffee');
-    expect(land.textContent).not.toContain('7c0ffee1');
+    // the commit is shortened: the full hash continues "1aab…"; checking only "7c0ffee1" would
+    // also match the landing time that follows it (17:55 in UTC+8)
+    expect(land.textContent).not.toContain('7c0ffee1a');
     unmount();
     await i18n.changeLanguage('zh');
     try {
