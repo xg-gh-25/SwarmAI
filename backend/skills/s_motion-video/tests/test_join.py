@@ -1,8 +1,8 @@
 """Tests for render.py's join: only the fade frames are re-encoded, every other frame is stream-copied.
 Run: python3 -m pytest tests/test_join.py -q   (from the skill directory)
 
-Needs ffmpeg + ffprobe on PATH (the ffmpeg tests skip without them); the rendered-project test also needs python
-playwright with Chromium (skips without them). MV_JOIN_BENCH_SIZE=1920x1080 runs the 60 s timing test at full HD."""
+Needs ffmpeg + ffprobe on PATH (the ffmpeg tests skip without them); the rendered-project test also needs SwarmAI's
+pinned browser runtime (conftest.py; skips without it, MV_REQUIRE_BROWSER=1 fails instead). MV_JOIN_BENCH_SIZE=1920x1080 runs the 60 s timing test at full HD."""
 import json
 import os
 import shutil
@@ -166,19 +166,9 @@ RENDERED = [("S01", 1.2, "fade", "#18324a", "#f2a541"), ("S02", 1.5, "cut", "#2b
             ("S05", 1.1, "cut", "#30302e", "#c38df2")]
 
 
-@pytest.fixture(scope="module")
-def chromium():
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        pytest.skip("python playwright not installed")
-    try:
-        with sync_playwright() as pw:
-            pw.chromium.launch(headless=True).close()
-    except Exception as e:  # browser missing or cannot start on this machine
-        pytest.skip(f"Chromium cannot launch: {str(e).splitlines()[0]}")
-    if not HAVE_FFMPEG:
-        pytest.skip("ffmpeg/ffprobe not on PATH")
+@pytest.fixture
+def chromium(pinned_browser_ffmpeg):
+    """render.py's browser (the pinned runtime) and ffmpeg, or a skip (conftest.py)"""
 
 
 def test_split_join_matches_full_reencode_on_rendered_project(chromium, tmp_path, capsys):

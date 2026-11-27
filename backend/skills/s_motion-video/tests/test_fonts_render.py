@@ -1,9 +1,10 @@
 """On a machine without the macOS families, CJK and Latin text in a style renders with the bundled faces.
 
-Needs Python Playwright with its Chromium (skipped otherwise, and on macOS, whose own families come first by design).
+Needs SwarmAI's pinned browser runtime, driven the way render.py drives it (conftest.py: skipped without it unless
+MV_REQUIRE_BROWSER=1; always skipped on macOS, whose own families come first by design).
 Each page is served like render.py serves scenes (/skill/references/styles/<style>.css), and Chromium's own report
 (CSS.getPlatformFontsForNode) says which font drew the glyphs.
-Run: python3 -m pytest tests/test_fonts_render.py -q   (from the skill directory)"""
+Run: python -m pytest skills/s_motion-video/tests/test_fonts_render.py -q   (from backend/)"""
 import asyncio
 import http.server
 import os
@@ -13,7 +14,9 @@ import threading
 import pytest
 
 SKILL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-playwright = pytest.importorskip("playwright.async_api")
+sys.path.insert(0, os.path.join(SKILL, "scripts"))
+
+import render  # noqa: E402
 pytestmark = pytest.mark.skipif(sys.platform == "darwin", reason="macOS renders its own families first by design")
 
 # style -> [(css font value, text, family the glyphs must come from)]
@@ -56,33 +59,33 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 async def _fonts():
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_port}/"
     out = {}
+
+    async def run(browser):
+        async def call(op, **f):
+            return (await browser.request(op, **f))[0].get("value")
+
+        for style in CASES:
+            page = (await call("open", w=1280, h=720, base=base, url=f"{base}page/{style}", init="", timeout=20000))["page"]
+            await call("eval", page=page, expr="document.fonts.ready.then(() => true)")
+            await call("cdp", page=page, method="DOM.enable")
+            await call("cdp", page=page, method="CSS.enable")
+            root = (await call("cdp", page=page, method="DOM.getDocument", params={"depth": -1}))["root"]["nodeId"]
+            for i in range(len(CASES[style])):
+                node = (await call("cdp", page=page, method="DOM.querySelector", params={"nodeId": root, "selector": f"#c{i}"}))["nodeId"]
+                fonts = (await call("cdp", page=page, method="CSS.getPlatformFontsForNode", params={"nodeId": node}))["fonts"]
+                out[(style, i)] = [f["familyName"] for f in fonts]
+            await call("close", page=page)
+
     try:
-        async with playwright.async_playwright() as p:
-            try:
-                browser = await p.chromium.launch(headless=True)
-            except Exception as e:   # noqa: BLE001
-                pytest.skip(f"Chromium does not start here: {str(e).splitlines()[0]}")
-            for style in CASES:
-                page = await browser.new_page()
-                await page.goto(f"http://127.0.0.1:{srv.server_port}/page/{style}")
-                await page.evaluate("document.fonts.ready")
-                cdp = await page.context.new_cdp_session(page)
-                await cdp.send("DOM.enable")
-                await cdp.send("CSS.enable")
-                root = (await cdp.send("DOM.getDocument", {"depth": -1}))["root"]["nodeId"]
-                for i in range(len(CASES[style])):
-                    node = (await cdp.send("DOM.querySelector", {"nodeId": root, "selector": f"#c{i}"}))["nodeId"]
-                    fonts = (await cdp.send("CSS.getPlatformFontsForNode", {"nodeId": node}))["fonts"]
-                    out[(style, i)] = [f["familyName"] for f in fonts]
-                await page.close()
-            await browser.close()
+        await render.with_browser(run)
     finally:
         srv.shutdown()
     return out
 
 
-def test_cjk_renders_in_bundled_family():
+def test_cjk_renders_in_bundled_family(pinned_browser):
     used = asyncio.run(_fonts())
     bad = []
     for style, cases in CASES.items():

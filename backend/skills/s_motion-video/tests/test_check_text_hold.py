@@ -1,7 +1,7 @@
 """Tests for check.py's key-text hold checks: the exact scene-time check (runtime reveals from the registered
 timeline) and the storyboard-time warning for late cue words.
 Run: python3 -m pytest tests/test_check_text_hold.py -q   (from the skill directory)
-The browser tests need python playwright with Chromium and skip without it (MV_REQUIRE_BROWSER=1: fail instead)."""
+The browser tests need SwarmAI's pinned browser runtime (render.py's driver) and skip without it (MV_REQUIRE_BROWSER=1: fail instead)."""
 import json
 import os
 import sys
@@ -217,18 +217,17 @@ def make_project(tmp_path, html, duration=DUR):
 
 
 def preview_or_skip(proj):
-    """the scene's preview result; skips without playwright/Chromium unless MV_REQUIRE_BROWSER=1 (then it fails)"""
+    """the scene's preview result; skips without the pinned browser runtime unless MV_REQUIRE_BROWSER=1 (then it fails)"""
     required = os.environ.get("MV_REQUIRE_BROWSER") == "1"
     try:
-        import playwright  # noqa: F401
         return render.preview_scenes(str(proj), ["S01"], 1, probe=True, log=lambda m: None)["S01"]
-    except (ImportError, render.UsageError) as e:   # playwright or Chromium missing or not launchable here
+    except render.UsageError as e:   # the runtime missing, or Chromium not launchable here
         if required:
             pytest.fail(f"MV_REQUIRE_BROWSER=1 but the browser is unavailable: {e}")
         pytest.skip(str(e))
 
 
-def test_browser_reveals_exclude_caption_ghost_and_static(tmp_path):
+def test_browser_reveals_exclude_caption_ghost_and_static(pinned_browser, tmp_path):
     res = preview_or_skip(make_project(tmp_path, scene_html(0.6)))
     assert res["errors"] == []
     got = {rv["el"]: rv for tw in res["tweens"] for rv in tw.get("reveals", [])}
@@ -238,7 +237,7 @@ def test_browser_reveals_exclude_caption_ghost_and_static(tmp_path):
     assert all("字幕" not in v["text"] for v in got.values())
 
 
-def test_browser_late_key_text_fails_with_hold_numbers(tmp_path, capsys):
+def test_browser_late_key_text_fails_with_hold_numbers(pinned_browser, tmp_path, capsys):
     proj = make_project(tmp_path, scene_html(3.1))                         # lands at 3.5 s, 0.5 s before the end
     preview_or_skip(proj)
     assert check.main(["--project", str(proj), "--scene", "S01"]) == 1
@@ -248,14 +247,14 @@ def test_browser_late_key_text_fails_with_hold_numbers(tmp_path, capsys):
     assert "holds 0.50s" in line and f"needs {KEY_NEED:.2f}s" in line and "last 1.2 s" in line
 
 
-def test_browser_early_key_text_passes(tmp_path, capsys):
+def test_browser_early_key_text_passes(pinned_browser, tmp_path, capsys):
     proj = make_project(tmp_path, scene_html(0.6))
     preview_or_skip(proj)
     assert check.main(["--project", str(proj), "--scene", "S01"]) == 0
     assert "key text" not in capsys.readouterr().out
 
 
-def test_browser_ancestor_reveal_decides_when_text_is_readable(tmp_path):
+def test_browser_ancestor_reveal_decides_when_text_is_readable(pinned_browser, tmp_path):
     html = scene_html(0.6).replace('<div class="t" id="key"', '<div id="wrap"><div class="t" id="key"').replace(
         f"{KEY}</div>", f"{KEY}</div></div>").replace(
         "MV.register(tl);", 'tl.fromTo("#wrap", { opacity: 0 }, { opacity: 1, duration: 0.5 }, 2.0);\n  MV.register(tl);')
@@ -266,7 +265,7 @@ def test_browser_ancestor_reveal_decides_when_text_is_readable(tmp_path):
     assert got["#wrap"]["at"] == 2.5 and got["#wrap"]["text"] == KEY and "#key" not in got
 
 
-def test_browser_nested_block_text_is_not_counted_twice(tmp_path):
+def test_browser_nested_block_text_is_not_counted_twice(pinned_browser, tmp_path):
     html = scene_html(2.0).replace('<div class="t" id="key"', '<div id="wrap"><div class="t" style="left:1000px;top:660px">Label</div><div class="t" id="key"').replace(
         f"{KEY}</div>", f"{KEY}</div></div>").replace(
         "MV.register(tl);", 'tl.fromTo("#wrap", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 0.2);\n  MV.register(tl);')

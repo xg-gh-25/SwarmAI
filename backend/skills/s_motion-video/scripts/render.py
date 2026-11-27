@@ -14,6 +14,13 @@ How a frame is made: a local HTTP server on 127.0.0.1 serves /skill/ (runtime, r
 window.__mvReady, then for frame i awaits window.__mvSeek(i/fps) and captures a JPEG (q92) that is piped to ffmpeg.
 Every request that is not to the local server is aborted (pages cannot reach the network).
 
+The browser is SwarmAI's pinned runtime (backend/core/feature_map/runtime.py: Node, @playwright/test and the
+Chromium headless shell, installed on first use into the app data folder, checksummed); there is no Python
+Playwright. render_driver.mjs next to this file runs on that Node and drives Chromium; this module starts it
+once per run and sends it JSON-line requests (Browser), one page per scene, --jobs scenes at a time. Run every
+script as "$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/render.py" ...; a runtime that cannot be had or a
+Chromium that does not start is an environment error (exit 2, the reason in one line).
+
 Fade transitions keep the film length = sum of scene durations: the outgoing scene gets a 0.4 s tail
 (build/<id>.tail.mp4) = its last frame frozen, with the NEXT scene's caption already in the caption box, and the
 join cross-fades that tail into the first 0.4 s of the next scene (xfade offset = end of the outgoing scene).
@@ -31,7 +38,6 @@ Exit codes: 0 ok, 1 render/verification failed, 2 usage or environment error.
 """
 import argparse
 import asyncio
-import base64
 import hashlib
 import json
 import os
@@ -39,6 +45,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -64,10 +71,20 @@ class RenderError(Exception):
     """a scene failed to render or verify -> exit 1"""
 
 
+def ffmpeg_hint(platform=None):
+    """how to get ffmpeg (which carries ffprobe) on this OS"""
+    p = platform or sys.platform
+    if p == "darwin":
+        return "brew install ffmpeg"
+    if p.startswith(("win", "cygwin", "msys")):
+        return "winget install Gyan.FFmpeg, then open a new terminal"
+    return "install the distribution's ffmpeg package, e.g. sudo apt install ffmpeg or sudo dnf install ffmpeg"
+
+
 def tool(name):
     p = shutil.which(name) or (f"/opt/homebrew/bin/{name}" if os.path.exists(f"/opt/homebrew/bin/{name}") else None)
     if not p:
-        raise UsageError(f"{name} not found (brew install ffmpeg)")
+        raise UsageError(f"{name} not found on PATH ({ffmpeg_hint()})")
     return p
 
 
@@ -352,49 +369,250 @@ PROBE_JS = r"""() => {
 }"""
 
 
+DRIVER = os.path.join(SKILL_DIR, "scripts", "render_driver.mjs")
+START_HANG_S = 120       # the driver must report Chromium running within this (a launch takes seconds)
+REQUEST_HANG_S = 300     # one request (open, a frame, an evaluate) longer than this is a hang, never a slow page
+STREAM_LIMIT = 1 << 26   # longest JSON header line the driver may send (a large __mvTweens() list)
+
+# What the driver's Node and Chromium get from the caller's environment: what they need to run and lay out text
+# (paths, temp, locale, time zone, fonts, libraries); nothing else, so no credential and no variable that changes how
+# Node or Playwright behave (NODE_OPTIONS, ...) reaches a process that runs scene pages.
+DRIVER_ENV = (
+    "PATH", "HOME", "USERPROFILE", "TMPDIR", "TEMP", "TMP", "SystemRoot", "windir",
+    "LOCALAPPDATA", "APPDATA", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TZ",
+    "FONTCONFIG_FILE", "FONTCONFIG_PATH", "LD_LIBRARY_PATH", "XDG_RUNTIME_DIR",
+    "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_DATA_DIRS",
+)
+
+
+def one_line(text, limit=600):
+    return " | ".join(ln.strip() for ln in str(text).splitlines() if ln.strip())[:limit]
+
+
+def runtime_module():
+    """core.feature_map.runtime: as SwarmAI's own interpreter has it, else from the backend folder this skill lives
+    in (<backend>/skills/s_motion-video/scripts)"""
+    try:
+        from core.feature_map import runtime
+        return runtime
+    except ImportError:
+        pass
+    d = os.path.dirname(os.path.realpath(__file__))
+    while os.path.dirname(d) != d:
+        if os.path.isfile(os.path.join(d, "core", "feature_map", "runtime.py")):
+            sys.path.insert(0, d)
+            try:
+                from core.feature_map import runtime
+                return runtime
+            except ImportError:
+                break
+        d = os.path.dirname(d)
+    raise UsageError('the renderer needs SwarmAI\'s pinned browser runtime (core.feature_map.runtime), which cannot '
+                     'be imported here; run the script with "$SWARM_BACKEND_BIN" py')
+
+
+def browser_runtime():
+    """the pinned Node + Playwright + Chromium runtime, installed on first use; UsageError with its reason when it
+    cannot be had"""
+    runtime = runtime_module()
+    try:
+        if not os.environ.get("SWARM_FEATURE_MAP_RUNTIME") and not (runtime.runtime_dir() / "ready.json").is_file():
+            print("render: installing SwarmAI's pinned browser runtime (a one-time download on first use)", file=sys.stderr)
+        return runtime.ensure()
+    except runtime.RuntimeUnavailable as e:
+        raise UsageError(f"the pinned browser runtime is not available: {one_line(e.reason)}") from None
+    except (ImportError, OSError) as e:
+        raise UsageError(f"the pinned browser runtime is not available: {one_line(e)}") from None
+
+
+def driver_env(rt):
+    """the driver's environment: the allowed caller variables (matched case-insensitively: Windows stores SystemRoot as
+    SYSTEMROOT, and Chromium needs it), the runtime's own, and the pinned @playwright/test entry point"""
+    allowed = {k.upper() for k in DRIVER_ENV}
+    env = {k: v for k, v in os.environ.items() if k.upper() in allowed}
+    env.update(rt.env())
+    env["MV_PLAYWRIGHT"] = (rt.playwright_pkg / "index.mjs").resolve().as_uri()
+    return env
+
+
+class DriverError(RenderError):
+    """a request the driver answered with an error; carries the page events of that reply"""
+
+    def __init__(self, msg, events=None):
+        super().__init__(msg)
+        self.events = events
+
+
+class Browser:
+    """One Chromium for a run, driven by render_driver.mjs on the pinned runtime. Requests are id-tagged and may be
+    in flight together (one per scene page); a reply is a JSON header line plus its `bytes` raw bytes."""
+
+    def __init__(self, proc, err, version):
+        self.proc, self.err, self.version = proc, err, version
+        self.pending = {}      # id -> (future, op)
+        self.next_id = 0
+        self.dead = None       # why the driver is gone, once it is
+        self.reader = asyncio.get_running_loop().create_task(self._read())
+
+    @classmethod
+    async def start(cls):
+        rt = browser_runtime()
+        err = tempfile.TemporaryFile()
+        cfg = json.dumps({"args": LAUNCH_ARGS, "timeout": 60000})
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(rt.node), DRIVER, cfg, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=err,
+                env=driver_env(rt), cwd=os.path.dirname(DRIVER), limit=STREAM_LIMIT)
+        except OSError as e:
+            err.close()
+            raise UsageError(f"the pinned Node could not start: {one_line(e)}") from None
+        hello = None
+        try:
+            line = await asyncio.wait_for(proc.stdout.readline(), START_HANG_S)
+            hello = json.loads(line) if line.strip() else None
+        except asyncio.TimeoutError:
+            why = f"Chromium did not start in {START_HANG_S}s"
+        except ValueError:
+            why = f"the browser driver printed {line[:200]!r}"
+        else:
+            why = None if hello and hello.get("ready") else ((hello or {}).get("error") or stderr_tail(err)
+                                                              or "the browser driver printed nothing")
+        if why:
+            if proc.returncode is None:
+                proc.kill()
+            await proc.wait()
+            tail = stderr_tail(err)
+            err.close()
+            raise UsageError(f"cannot launch the pinned Chromium: {one_line(why, 400)}"
+                             + (f" ({tail[:300]})" if tail and tail not in why else ""))
+        return cls(proc, err, hello.get("version"))
+
+    async def _read(self):
+        why = "the browser driver stopped"
+        try:
+            while True:
+                line = await self.proc.stdout.readline()
+                if not line:
+                    break
+                head = json.loads(line)
+                if not isinstance(head, dict):
+                    raise ValueError("reply is not a JSON object")
+                n = int(head.get("bytes") or 0)
+                data = await self.proc.stdout.readexactly(n) if n else b""
+                fut = self.pending.pop(head.get("id"), (None, None))[0]
+                if fut is not None and not fut.done():
+                    fut.set_result((head, data))
+        except asyncio.CancelledError:
+            why = "the browser driver was closed"
+        except Exception as e:   # any broken reply (not JSON, not an object, short): every waiting request fails now
+            why = f"the browser driver sent a broken reply ({type(e).__name__})"
+        self.dead = why
+        for rid, (fut, op) in list(self.pending.items()):
+            self.pending.pop(rid, None)
+            if not fut.done():
+                tail = stderr_tail(self.err)
+                fut.set_exception(RenderError(f"{why} during '{op}'" + (f": {tail}" if tail else "")))
+
+    async def request(self, op, **fields):
+        """send one request; returns (reply header, bytes). DriverError when the driver answered with an error,
+        RenderError when it is gone or does not answer within REQUEST_HANG_S (it is then killed)"""
+        if self.dead:
+            raise RenderError(f"{self.dead} before '{op}'")
+        self.next_id += 1
+        rid = self.next_id
+        fut = asyncio.get_running_loop().create_future()
+        self.pending[rid] = (fut, op)
+        try:
+            self.proc.stdin.write((json.dumps({"id": rid, "op": op, **fields}, ensure_ascii=False) + "\n").encode("utf-8"))
+            await self.proc.stdin.drain()
+        except (OSError, RuntimeError):
+            pass   # the driver is gone: the reader fails the request with its reason
+        try:
+            head, data = await asyncio.wait_for(fut, REQUEST_HANG_S)
+        except asyncio.TimeoutError:
+            self.pending.pop(rid, None)
+            await self.kill()
+            raise RenderError(f"the browser driver did not answer '{op}' in {REQUEST_HANG_S}s (killed)") from None
+        if not head.get("ok"):
+            raise DriverError(one_line(head.get("error") or f"'{op}' failed", 400), head.get("events"))
+        return head, data
+
+    async def kill(self):
+        if self.proc.returncode is None:
+            self.proc.kill()
+        await self.proc.wait()
+
+    async def close(self):
+        """stdin closed: the driver finishes, closes Chromium and exits; killed if it does not within 30 s"""
+        if self.proc.returncode is None:
+            try:
+                self.proc.stdin.close()
+            except (OSError, RuntimeError):
+                pass
+            try:
+                await asyncio.wait_for(self.proc.wait(), 30)
+            except asyncio.TimeoutError:
+                await self.kill()
+        try:
+            await asyncio.wait_for(self.reader, 10)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            self.reader.cancel()
+        self.err.close()
+
+
+def stderr_tail(err):
+    try:
+        err.seek(0)
+        text = err.read().decode("utf-8", "replace")
+    except (OSError, ValueError):
+        return ""
+    return one_line("\n".join(text.strip().splitlines()[-4:]), 400)
+
+
 class ScenePage:
     """one browser context + page for one scene; collects page errors, failed and blocked requests"""
 
     def __init__(self, browser, server, data):
         self.browser, self.server, self.data = browser, server, data
         self.errors, self.missing, self.blocked, self.console = [], [], [], []
+        self.id = None
+
+    def _take(self, events):
+        if events:
+            self.errors += events.get("errors") or []
+            self.missing += events.get("missing") or []
+            self.blocked += events.get("blocked") or []
+            self.console += events.get("console") or []
+
+    async def _call(self, op, **fields):
+        try:
+            head, data = await self.browser.request(op, **fields)
+        except DriverError as e:
+            self._take(e.events)
+            raise RenderError(f"{self.data['id']}: {op}: {e}" + self.problems()) from None
+        self._take(head.get("events"))
+        return head.get("value"), data
 
     async def open(self):
         d = self.data
-        self.ctx = await self.browser.new_context(viewport={"width": d["width"], "height": d["height"]}, device_scale_factor=1,
-                                                  java_script_enabled=True, bypass_csp=False)
-        await self.ctx.add_init_script(script="window.__MV_DATA = " + json.dumps(d, ensure_ascii=False) + ";")
         base = self.server.base + "/"
-
-        async def gate(route):
-            if route.request.url.startswith(base):
-                await route.continue_()
-            else:
-                self.blocked.append(route.request.url[:200])
-                await route.abort()
-
-        await self.ctx.route("**/*", gate)
-        self.page = await self.ctx.new_page()
-        self.page.on("pageerror", lambda e: self.errors.append(str(e).splitlines()[0][:300]))
-        self.page.on("response", lambda r: self.missing.append(f"{r.status} {r.url.replace(self.server.base, '')}") if r.status >= 400 else None)
-        self.page.on("console", lambda m: self.console.append(f"{m.type}: {m.text[:300]}")
-                     if m.type in ("warning", "error") and not m.text.startswith("Failed to load resource") else None)
         url = f"{self.server.base}/project/scenes/{d['id']}.html"
-        await self.page.goto(url, wait_until="load", timeout=READY_TIMEOUT_MS)
+        value, _ = await self._call("open", w=d["width"], h=d["height"], base=base, url=url, timeout=READY_TIMEOUT_MS,
+                                    init="window.__MV_DATA = " + json.dumps(d, ensure_ascii=False) + ";")
+        self.id = value["page"]
         ready_js = "window.__mvReady === true && !!(window.MV && window.MV.registered)"
         t_end = time.time() + READY_TIMEOUT_MS / 1000
         while not self.errors:
-            if await self.page.evaluate(ready_js):
+            if await self.evaluate(ready_js):
                 break
             if time.time() > t_end:
-                state = await self.page.evaluate("({rt: !!window.MV, reg: !!(window.MV && window.MV.registered)})")
+                state = await self.evaluate("({rt: !!window.MV, reg: !!(window.MV && window.MV.registered)})")
                 why = ("the runtime did not load (is /skill/runtime/scene-runtime.js linked?)" if not state["rt"]
                        else "scene did not call MV.register(tl)" if not state["reg"] else "fonts/images never finished loading")
                 raise RenderError(f"{d['id']}: page not ready after {READY_TIMEOUT_MS // 1000}s: {why}" + self.problems())
             await asyncio.sleep(0.05)
         if self.errors:
             raise RenderError(f"{d['id']}: page script error" + self.problems())
-        self.cdp = await self.ctx.new_cdp_session(self.page)
 
     def problems(self):
         s = ""
@@ -407,22 +625,28 @@ class ScenePage:
             s += "\n    blocked network requests: " + ", ".join(self.blocked[:5])
         return s
 
+    async def evaluate(self, expr):
+        """the value of a JavaScript expression in the page (a promise is awaited)"""
+        return (await self._call("eval", page=self.id, expr=expr))[0]
+
     async def seek(self, t, caption=None):
-        if caption is None:
-            await self.page.evaluate("t => window.__mvSeek(t)", t)
-        else:
-            await self.page.evaluate("([t, c]) => window.__mvSeek(t, c)", [t, caption])
+        await self._call("seek", page=self.id, t=t, caption=caption)
 
     async def jpeg(self):
-        r = await self.cdp.send("Page.captureScreenshot", {"format": "jpeg", "quality": JPEG_Q, "optimizeForSpeed": True,
-                                                            "captureBeyondViewport": False, "fromSurface": True})
-        return base64.b64decode(r["data"])
+        return (await self._call("shot", page=self.id, quality=JPEG_Q))[1]
+
+    async def frame(self, t, caption=None):
+        """seek to t (with the caption override when not None), then the JPEG of the frame: one request"""
+        return (await self._call("frame", page=self.id, t=t, caption=caption, quality=JPEG_Q))[1]
 
     async def close(self):
+        if self.id is None or self.browser.dead:
+            return
         try:
-            await self.ctx.close()
-        except Exception:
+            await self._call("close", page=self.id)
+        except RenderError:
             pass
+        self.id = None
 
 
 SETPARAMS = "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
@@ -451,8 +675,7 @@ async def encode_frames(sp, times, captions, out, key_at=None):
                                                 stderr=asyncio.subprocess.PIPE)
     try:
         for i, t in enumerate(times):
-            await sp.seek(t, None if captions is None else captions[i])
-            proc.stdin.write(await sp.jpeg())
+            proc.stdin.write(await sp.frame(t, None if captions is None else captions[i]))
             await proc.stdin.drain()
             if sp.errors:
                 raise RenderError(f"{sp.data['id']}: page error at t={t:.3f}s" + sp.problems())
@@ -507,19 +730,18 @@ async def preview_scene(browser, server, project, data, probe=True):
     try:
         await sp.open()
         if probe:
-            res["tweens"] = await sp.page.evaluate("window.__mvTweens ? window.__mvTweens() : []")
+            res["tweens"] = await sp.evaluate("window.__mvTweens ? window.__mvTweens() : []")
         for tag, f in zip("abc", sorted({0, n // 2, n - 1}) if n >= 3 else [0] * 3):
             t = f / fps
-            await sp.seek(t)
             p = os.path.join(review, f"{sid}-{tag}.jpg")
-            open(p, "wb").write(await sp.jpeg())
+            open(p, "wb").write(await sp.frame(t))
             item = {"tag": tag, "frame": f, "t": round(t, 3), "path": p}
             if probe:
-                item.update(await sp.page.evaluate(PROBE_JS))
+                item.update(await sp.evaluate("(" + PROBE_JS + ")()"))
             res["stills"].append(item)
     except RenderError as e:
         res["errors"].append(str(e))
-    except Exception as e:   # playwright errors (timeouts, crashed page)
+    except Exception as e:   # anything else (a crashed page, a broken reply)
         res["errors"].append(f"{sid}: {type(e).__name__}: {str(e).splitlines()[0][:300]}" + sp.problems())
     finally:
         await sp.close()
@@ -530,19 +752,12 @@ async def preview_scene(browser, server, project, data, probe=True):
 
 
 async def with_browser(fn):
+    """run fn(browser) with one pinned Chromium (render_driver.mjs), closed afterwards"""
+    browser = await Browser.start()
     try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        raise UsageError("python playwright is not installed (python3 -m pip install playwright)")
-    async with async_playwright() as pw:
-        try:
-            browser = await pw.chromium.launch(headless=True, args=LAUNCH_ARGS)
-        except Exception as e:
-            raise UsageError(f"cannot launch Chromium: {str(e).splitlines()[0]} (try: python3 -m playwright install chromium)")
-        try:
-            return await fn(browser)
-        finally:
-            await browser.close()
+        return await fn(browser)
+    finally:
+        await browser.close()
 
 
 def select_scenes(sb, scene):
