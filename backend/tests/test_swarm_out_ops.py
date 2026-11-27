@@ -117,12 +117,13 @@ def test_only_restart_widens_the_agents_hive_rights():
         assert by_name[name].callers == {PERSON}, name
     assert PERSON in by_name["hive.start"].callers
     # beyond reads, the owner agent's Hive rights are exactly these: restart, start, and
-    # keeping a Hive up to date (an EC2 Hive's update, the elastic Hive's image update)
+    # keeping a Hive up to date (an EC2 Hive's update, the elastic Hive's image update),
+    # revoking a login key and replacing the origin secret (neither grants anyone access)
     hive_agent = {op.name for op in swarm_out_ops.ops()
                   if op.name.startswith("hive.") and OWNER in op.callers and op.weight != "read"}
     assert hive_agent == {"hive.restart", "hive.start", "hive.update", "hive.elastic.update",
                           "hive.elastic.standby_round", "hive.idle_stop",
-                          "hive.access.revoke"}, hive_agent
+                          "hive.access.revoke", "hive.origin_secret.rotate"}, hive_agent
     # who may log in: the agent may revoke a key (it only takes access away); making a key,
     # listing (same path as making one) and rotating the Host's stay the person's
     assert OWNER in by_name["hive.access.revoke"].callers

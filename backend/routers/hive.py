@@ -952,6 +952,41 @@ async def revoke_access(instance_id: str, user: str):
     return {"ok": True}
 
 
+# states another operation holds a Hive in (an update, a rotation, a start or stop): 409
+_BUSY = ("updating", "starting", "stopping", "pending", "provisioning", "installing", "deleting")
+
+
+@router.post("/instances/{instance_id}/origin-secret/rotate")
+async def rotate_origin_secret(instance_id: str):
+    """A fresh origin secret for this Hive (the value its CloudFront distribution sends and
+    its Caddy checks), so a copy that leaked stops opening the origin. Claims the Hive
+    (running → updating) and returns; the rotation runs in the background and ends
+    'running', with error_message saying why when it failed (provisioner.rotate_origin_secret)."""
+    _require_desktop()
+    await _refuse_not_ec2(instance_id)
+    async with _conn() as c:
+        cursor = await c.execute(
+            "SELECT status, cloudfront_dist_id FROM hive_instances WHERE id = ?", (instance_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        row = dict(row)
+        if not row.get("cloudfront_dist_id"):
+            raise HTTPException(status_code=400, detail="This Hive has no CloudFront distribution")
+        if row["status"] in _BUSY:
+            raise HTTPException(status_code=409, detail="The Hive is busy (updating or changing); try again when it is running")
+        if row["status"] != "running":
+            raise HTTPException(status_code=400, detail="Instance must be running to rotate its origin secret")
+    provisioner = _get_provisioner()
+    try:
+        await provisioner.claim_update(instance_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    _keep(asyncio.create_task(provisioner.rotate_origin_secret(instance_id, claimed=True),
+                              name=f"hive-origin-rotate-{instance_id[:8]}"))
+    return {"status": "updating"}
+
+
 @router.post("/instances/{instance_id}/rotate-host-key")
 async def rotate_host_key(instance_id: str):
     """A new key for this Host's own connection to the Hive (people's keys unchanged)."""

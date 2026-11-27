@@ -63,6 +63,14 @@ def _format_sql_value(v) -> str:
 # Sync helpers (run off-loop via executors.run_in('io', ...))
 # ---------------------------------------------------------------------------
 
+# Columns a backup never carries: only the snapshot copy is cleared, the live store keeps
+# them. tests/test_hive_origin_rotation.py checks every column of hive_instances whose name
+# looks like a secret is here, so a new one cannot leave in a backup unnoticed.
+BACKUP_SECRET_COLUMNS: dict[str, tuple[str, ...]] = {
+    "hive_instances": ("auth_password", "origin_secret"),
+}
+
+
 def _export_tables_sync(db_path: Path, export_dir: Path, tables: list[str]) -> int:
     """Export DB tables to gzipped SQL dumps (sync, blocking I/O).
 
@@ -105,13 +113,19 @@ def _export_tables_sync(db_path: Path, export_dir: Path, tables: list[str]) -> i
         }
 
         # The Host's own key of each EC2 Hive never leaves in a backup (design
-        # 2026-11-26-hive-access-credentials §2.6). Only the snapshot copy is changed; a
-        # restored Host gives the Hive a new key over SSM (hive/access.rotate_host_key).
-        if "hive_instances" in valid_tables:
-            cols = {r[1] for r in snap.execute("PRAGMA table_info(hive_instances)").fetchall()}
-            if "auth_password" in cols:
-                snap.execute("UPDATE hive_instances SET auth_password = NULL")
-                snap.commit()
+        # 2026-11-26-hive-access-credentials §2.6), nor does its origin secret (the value
+        # its CloudFront distribution sends). Only the snapshot copy is changed. A restored
+        # Host gives the Hive a new key over SSM (hive/access.rotate_host_key), and its
+        # next update finds no origin secret stored and locks the origin again with the
+        # value the distribution still sends (provisioner._lock_origin reuses it).
+        for table, secrets_ in BACKUP_SECRET_COLUMNS.items():
+            if table not in valid_tables:
+                continue
+            cols = {r[1] for r in snap.execute(f'PRAGMA table_info("{table}")').fetchall()}
+            for secret in secrets_:
+                if secret in cols:
+                    snap.execute(f'UPDATE "{table}" SET "{secret}" = NULL')
+        snap.commit()
 
         for table in tables:
             if table not in valid_tables:

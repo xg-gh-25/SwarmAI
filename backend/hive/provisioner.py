@@ -334,6 +334,12 @@ class OriginLockError(RuntimeError):
     this module and never holds the secret, so it may be logged and shown."""
 
 
+class OriginGuardIntact(OriginLockError):
+    """Removing the guard failed and the Hive still has it: the script ran to its end and
+    put the previous Caddyfile back ('Failed'). Every other way a removal can end without
+    Success (the SSM call timed out or was cancelled, a polling error, a cancellation) leaves
+    it unknown whether the Caddy rule is still there."""
+
 def _hive_origin(config: dict) -> dict:
     for origin in (config.get("Origins") or {}).get("Items") or []:
         if origin.get("Id") == _HIVE_ORIGIN_ID:
@@ -2589,7 +2595,98 @@ fi
             raise
         await self._update_instance(instance_id, status="running", error_message=None)
 
-    async def _remove_origin_secret(self, instance_id: str) -> None:
+    async def rotate_origin_secret(self, instance_id: str, claimed: bool = False) -> None:
+        """Replace a Hive's origin secret with a fresh one, so a copy that leaked (a log, a
+        backup) no longer opens its origin. It is the two existing paths in a row, each in
+        the order that never locks the Hive out: _remove_origin_secret (Caddy rule out,
+        then the header off the distribution), then _lock_origin (with no header left it
+        makes a new value: the header, the distribution Deployed, then the Caddy rule). Between
+        the two the origin is guarded by its security group (CloudFront only) and basic
+        auth, not by a secret, for as long as the distribution takes to deploy.
+
+        The old values are the one stored AND the one the distribution sends (read first):
+        a Host restored from a backup stores none, and a rotation that failed halfway may
+        have cleared the stored one while the distribution still sends it. The guard is
+        removed when either is set: otherwise _lock_origin would re-lock with the value still
+        sent (the leaked one), and the rotation succeeds only when the new stored value is
+        neither. A Hive that never had a secret is simply locked with one.
+
+        It holds the running → updating gate (claim_update) throughout and ends 'running',
+        with error_message cleared, or with what state it left the Hive in; the error is
+        raised. What a failure does depends on what is known about the guard: the removal
+        failed and put the Caddyfile back (OriginGuardIntact): nothing to do, the old secret
+        stays; the guard came off (the stored secret is cleared only then) and a later step
+        failed: it locks the origin again once, now, with the value the distribution sends
+        (possibly the old one); the removal ended any other way (a timeout, a polling error,
+        a cancellation: its script may still be running, and a relock now could overlap it):
+        the stored secret is cleared, so the next update's origin step locks the origin again
+        (provisioner.update runs it whenever no secret is stored)."""
+        if not claimed:
+            await self.claim_update(instance_id)
+        old: set = set()
+        session = None
+        instance: dict = {}
+        # the removal started / its Caddy step reported Success (a stored secret of None does
+        # not tell: a Host restored from a backup stores none before anything was removed)
+        remove_started = False
+        rule_off = {"done": False}
+        try:
+            instance = await self._get_instance(instance_id)
+            dist_id = instance.get("cloudfront_dist_id")
+            if not dist_id:
+                raise OriginLockError("the Hive has no CloudFront distribution")
+            account = await self._get_account(instance["account_ref"])
+            session = await self._session(account, instance["region"], "manage")
+            cf = session.client("cloudfront")
+
+            def _sent() -> Optional[str]:
+                return _origin_header_value(cf.get_distribution(Id=dist_id)["Distribution"]
+                                            ["DistributionConfig"])
+            old = {v for v in (instance.get("origin_secret"), await asyncio.to_thread(_sent)) if v}
+            if old:
+                remove_started = True
+                await self._remove_origin_secret(
+                    instance_id, on_rule_off=lambda: rule_off.update(done=True))
+                instance = await self._get_instance(instance_id)
+            await self._lock_origin(instance_id, instance, session)
+            after = (await self._get_instance(instance_id)).get("origin_secret")
+            if not after or after in old:
+                raise OriginLockError("the stored secret did not change")
+        except BaseException as e:
+            reason = str(e) if isinstance(e, OriginLockError) else type(e).__name__
+            note = "the Hive keeps its old secret; rotate again"
+            try:
+                stored = (await self._get_instance(instance_id)).get("origin_secret")
+                removed = rule_off["done"]
+                if remove_started and not removed and not isinstance(e, OriginGuardIntact):
+                    # unknown: no relock now; the next update locks the origin again
+                    if stored:
+                        await self._update_instance(instance_id, origin_secret=None)
+                    note = ("removing the guard did not report back, so the origin may have no "
+                            "secret check until the next update locks it again; rotate again")
+                elif removed and not stored:
+                    # the guard came off and no script is left running: lock it again now
+                    try:
+                        await self._lock_origin(instance_id, await self._get_instance(instance_id), session)
+                        note = ("the origin is locked again with the value its distribution sends "
+                                "now, which may still be the old one; rotate again")
+                    except Exception:  # noqa: BLE001 — the note says the guard is off
+                        note = ("the origin has no secret check until the next update or a "
+                                "rotation succeeds; rotate again")
+                await self._update_instance(
+                    instance_id, status="running",
+                    error_message=f"Rotating the origin secret failed ({reason}); {note}.")
+            except Exception:  # noqa: BLE001
+                logger.error("Failed to reset status after origin rotation error for %s",
+                             instance_id)
+            raise
+        await self._update_instance(instance_id, status="running", error_message=None)
+        logger.info("Hive %s: origin secret rotated", instance.get("name"))
+
+    async def _remove_origin_secret(self, instance_id: str, on_rule_off=None) -> None:
+        """Caddy rule out (SSM), the stored secret cleared, then the header off the
+        distribution. ``on_rule_off`` is called once the rule is out and the secret cleared:
+        a failure after it (the header step) leaves no script running on the Hive."""
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
         session = await self._session(account, instance["region"], "manage")
@@ -2601,9 +2698,12 @@ fi
             self._run_ssm_script, session, instance["region"], ec2_id,
             _origin_guard_script("remove", None), "SwarmAI Hive origin guard: remove")
         if status != "Success":
-            raise OriginLockError(f"removing the Caddy rule ended {status}: {output[-200:]}; "
-                                  f"the distribution was not changed")
+            error = OriginGuardIntact if status == "Failed" else OriginLockError
+            raise error(f"removing the Caddy rule ended {status}: {output[-200:]}; "
+                        f"the distribution was not changed")
         await self._update_instance(instance_id, origin_secret=None)
+        if on_rule_off is not None:
+            on_rule_off()
 
         dist_id = instance.get("cloudfront_dist_id")
         if dist_id:

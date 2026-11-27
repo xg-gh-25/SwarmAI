@@ -183,6 +183,11 @@ _STATIC: "tuple[Op, ...]" = (
         "change"),
     _op("hive.access.rotate_host_key", "POST", f"{_HV}/instances/{{instance_id}}/rotate-host-key",
         _P, "change"),
+    # a fresh origin secret (the value the Hive's CloudFront distribution sends): it replaces
+    # a value that may have leaked and grants no one access (during the switch the origin is
+    # still behind its security group and basic auth), so the owner agent may do it
+    _op("hive.origin_secret.rotate", "POST",
+        f"{_HV}/instances/{{instance_id}}/origin-secret/rotate", _PO, "change"),
     _op("hive.retry", "POST", f"{_HV}/instances/{{instance_id}}/retry", _P, "off_machine"),
     # a new Hive first, then the old one is deleted (§7.3: the last one is only replaced)
     _op("hive.replace", "POST", f"{_HV}/instances/{{instance_id}}/replace", _P, "irreversible"),
