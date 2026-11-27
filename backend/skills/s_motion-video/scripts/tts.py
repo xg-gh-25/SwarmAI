@@ -536,16 +536,16 @@ def aws_session():
     this; the standard credential chain only for a plain python3 outside SwarmAI."""
     try:
         import boto3
-        import botocore.session
     except ImportError:
         raise EnvError(BOTO3_MISSING)
     cfg = swarmai_profile_file()
     if cfg is None:
         return boto3.Session()
-    bs = botocore.session.Session()
-    bs.set_config_variable("config_file", str(cfg))
-    bs.set_config_variable("credentials_file", os.devnull)   # only the swarmai profile, never ~/.aws keys
-    return boto3.Session(botocore_session=bs, profile_name="swarmai")
+    # this script's own process only (a short-lived child of the agent's shell): read SwarmAI's profile file
+    # alone, never the person's ~/.aws config or keys
+    os.environ["AWS_CONFIG_FILE"] = str(cfg)
+    os.environ["AWS_SHARED_CREDENTIALS_FILE"] = os.devnull
+    return boto3.Session(profile_name="swarmai")
 
 
 def polly_client(region=None):

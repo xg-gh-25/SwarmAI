@@ -421,6 +421,8 @@ def test_polly_uses_the_swarmai_account_not_the_persons_own_aws(tmp_path, monkey
     cfg = tmp_path / "config"
     cfg.write_text(f'[profile swarmai]\ncredential_process = "{sys.executable}" "{proc}"\nregion = us-west-2\n')
     monkeypatch.setattr(tts, "swarmai_profile_file", lambda: cfg)
+    for var in ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"):   # aws_session sets them: restore after the test
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAPERSONSOWN")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "x")
     monkeypatch.setenv("AWS_PROFILE", "someone-elses")
